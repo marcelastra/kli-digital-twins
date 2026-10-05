@@ -1,0 +1,45 @@
+kli-digital-twins
+Kravis Leadership Institute, Claremont McKenna College
+
+This product includes software developed by third parties, redistributed under
+the Apache License, Version 2.0. See LICENSE for the full license text and
+ATTRIBUTION.md for file-by-file provenance.
+
+-------------------------------------------------------------------------------
+Twin-2K-500 Mega-Study
+  https://github.com/TianyiPeng/Twin-2K-500-Mega-Study
+  Commit afe2bb933fce377ed196f441a4c12962cb55a53a (2026-06-08)
+  Copyright the Twin-2K-500 Mega-Study authors.
+  Licensed under the Apache License, Version 2.0.
+
+  Associated publication:
+    Tianyi Peng, George Gui, Melanie Brucks, Daniel J. Merlau, Grace Jiarui
+    Fan, Malek Ben Sliman, Eric J. Johnson, et al. "Digital Twins as Funhouse
+    Mirrors: Five Key Distortions." arXiv:2509.19088.
+
+  Components redistributed here: processing_qualtrics_qsf/,
+  processing_qualtrics_csv/, evaluation/json2csv.py,
+  mega_study_evaluation/common/, post_metric_calculation/,
+  configs/study_template.yaml.j2, scripts/setup_study.py, Snakefile,
+  download_dataset.py.
+
+-------------------------------------------------------------------------------
+digital-twin-simulation
+  https://github.com/tianyipeng-lab/digital-twin-simulation
+  Commit f1eed510c9a4fb47aaa9bb46e178aaa2d9224623 (2025-08-04)
+  Copyright the Twin-2K-500 authors.
+  Licensed under the Apache License, Version 2.0.
+
+  Associated publication:
+    Olivier Toubia, George Z. Gui, Tianyi Peng, Daniel J. Merlau, Ang Li,
+    Haozhe Chen. "Twin-2K-500: A dataset for building digital twins of over
+    2,000 people based on their answers to over 500 questions."
+    arXiv:2505.17479.
+
+  Components redistributed here: text_simulation/ (persona and question
+  rendering, prompt assembly, LLM execution, response postprocessing).
+
+-------------------------------------------------------------------------------
+The Twin-2K-500 dataset itself (https://huggingface.co/datasets/LLM-Digital-Twin/Twin-2K-500)
+is licensed CC BY 4.0 and is NOT redistributed in this repository. It is
+downloaded at runtime by download_dataset.py.

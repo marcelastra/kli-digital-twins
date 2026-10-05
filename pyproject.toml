@@ -1,0 +1,80 @@
+[tool.poetry]
+name = "kli-digital-twins"
+version = "0.1.0"
+description = "Digital twin construction and evaluation pipeline, assembled from the Twin-2K-500 Mega-Study and digital-twin-simulation repositories. See ATTRIBUTION.md."
+authors = ["Kravis Leadership Institute"]
+readme = "README.md"
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.11.7"
+
+# --- Qualtrics ingestion (processing_qualtrics_qsf, processing_qualtrics_csv)
+beautifulsoup4 = "^4.13.4"
+pandas = "^2.0.0"
+numpy = "^1.24.0"
+pyyaml = "^6.0"
+tqdm = "^4.66.0"
+
+# --- Twin construction (text_simulation)
+openai = "^1.78.1"
+tenacity = "^9.1.2"
+python-dotenv = "^1.1.0"
+# json-repair is NOT used by the vendored postprocess_responses.py, which parses
+# LLM output with a bare json.loads after stripping ``` fences. The mega-study
+# upstream depends on it, implying their unpublished version used it. Included
+# here because hardening that parse is a recommended first fix (see README).
+json-repair = "^0.50.1"
+# Gemini: the vendored llm_helper.py calls genai.Client() and types.FinishReason,
+# which belong to the newer `google-genai` SDK, NOT `google-generativeai`. The
+# upstream pin below is therefore broken for the gemini provider. Left at the
+# upstream pin deliberately so the discrepancy stays visible; switch to
+# `google-genai` if you intend to use Gemini. See README "Inherited defects".
+google-generativeai = "^0.8.5"
+
+# --- Orchestration
+snakemake = "^9.5.1"
+jinja2 = "^3.1.6"
+ruamel-yaml = "^0.18.14"
+
+# --- Dataset download (download_dataset.py)
+datasets = "^2.18.0"
+huggingface-hub = "^0.21.0"
+
+# --- Evaluation (json2csv, mega_study_evaluation, post_metric_calculation)
+scipy = "^1.11.0"
+statsmodels = "^0.14.0"
+scikit-learn = "^1.3.0"
+openpyxl = "^3.1.0"
+matplotlib = "^3.7.0"
+seaborn = "^0.13.2"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.4.1"
+ruff = "^0.12.5"
+mypy = "^1.17.0"
+ipykernel = "^6.30.0"
+types-pyyaml = "^6.0.12.20250516"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pyright]
+typeCheckingMode = "off"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+exclude = [".git", "__pycache__", "Snakefile"]
+
+[tool.ruff.lint]
+# Deliberately lighter than the mega-study upstream's ruleset: the vendored
+# files do not satisfy its `disallow_untyped_defs` / pydocstyle settings, and
+# reformatting them would destroy the byte-for-byte provenance recorded in
+# ATTRIBUTION.md. Tighten this only for newly written code.
+select = ["E", "W", "F", "I"]
+ignore = ["E402", "E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]

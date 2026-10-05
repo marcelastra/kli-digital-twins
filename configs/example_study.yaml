@@ -1,0 +1,57 @@
+qsf_to_json:
+  input_file: data/accuracy_nudges/raw_data/survey.qsf
+  output_file: data/accuracy_nudges/wave_qsf_json/survey_flow.json
+  exclude_blocks: null
+
+csv_to_fill_answers:
+  input_survey_template: data/accuracy_nudges/wave_qsf_json/survey_flow.json
+  input_csv_file: data/accuracy_nudges/raw_data/response.csv
+  output_dir: data/accuracy_nudges/response_json
+  limit: -1
+
+# Text simulation configuration
+text_simulation:
+  personas_to_texts:
+    persona_json_dir: data/mega_persona_json/mega_persona
+    output_text_dir: text_simulation/text_personas
+    persona_variant: full
+
+  questions_to_texts:
+    input_path: data/accuracy_nudges/response_json
+    output_dir: text_simulation/accuracy_nudges/text_questions
+    include_reasoning: false
+
+  create_text_simulation_input:
+    persona_text_dir: data/full_persona_text
+    question_prompts_dir: text_simulation/accuracy_nudges/text_questions
+    output_combined_prompts_dir: text_simulation/accuracy_nudges/text_simulation_input
+    persona_prompt_header: |
+      ## Persona Profile (This individual's past survey responses):
+    persona_question_prompt_separator: |
+      ## New Survey Question & Instructions (Please respond as the persona described above):
+    empty_persona_prompt: false
+
+  LLM_simulation:
+    input_dir: text_simulation/accuracy_nudges/text_simulation_input
+    output_dir: text_simulation/accuracy_nudges/text_simulation_output
+    question_json_base_dir: data/accuracy_nudges/response_json
+    output_updated_questions_dir: text_simulation/accuracy_nudges/response_json_llm_imputed
+    system_instruction: |
+      You are an AI assistant. Your task is to answer the 'New Survey Question' as if you are the person described in the 'Persona Profile' (which consists of their past survey responses). 
+      Remain consistent with the persona's previous answers and stated traits. Simulate their responses to new questions while accounting for human cognitive limitations, uncertainty, and biases.
+      Follow all instructions provided for the new question carefully regarding the format of your answer.
+    LLM_config:
+      provider: "openai"
+      model_name: "gpt-4.1"
+      temperature: 0.7
+      max_tokens: 16384
+      max_retries: 10
+    num_workers: 300
+    force_regenerate: false
+    max_personas: -1 # -1 for all personas
+
+  convert_to_csv:
+    input_json_dir: text_simulation/accuracy_nudges/response_json_llm_imputed
+    reference_csv_path: data/accuracy_nudges/raw_data/response.csv
+    output_dir: text_simulation/accuracy_nudges/csv_output
+
