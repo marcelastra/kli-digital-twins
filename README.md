@@ -57,7 +57,10 @@ carry `empty_persona_prompt`, but no code reads it, and
 `create_text_simulation_input.py:57` requires a matching persona file per
 participant, which makes a persona-free prompt unreachable by construction.
 Without this arm you cannot separate "the model captured this individual" from
-"the model captured the population average".
+"the model captured the population average". Our implementation defaults to
+reproducing Peng et al.'s wording exactly, and makes the alternative a one-line
+config change — see "Control-arm wording" below, which is also where an
+unreported and cheap result is described.
 
 **The analysis CSV** (`kli/responses_to_csv.py`). Exists in neither repository.
 
@@ -201,11 +204,62 @@ python -m kli.run_simulation --config configs/my_study_control.yaml
 ```
 
 Same participants, same questions, same model, persona withheld. The question
-section of the prompt is byte-identical between arms; the only wording that
-differs is the opening sentence, because telling a model to answer "as the
-person described above" when no person is described is a confound rather than a
-clean baseline. Both strings are written into `run_manifest.json` so the exact
-difference is on the record.
+section of the prompt is byte-identical between arms.
+
+#### Control-arm wording, and an open question worth a paragraph in the paper
+
+`control_wording` has two settings. The default, `upstream`, reproduces what
+Peng et al. actually did.
+
+**What they did.** Verified across all 76 of their released `empty_persona`
+configs: the only substantive difference from the matching persona config is
+`empty_persona_prompt: false -> true`. Every prompt string is left in place.
+Their control arm ran with the system instruction *"answer the 'New Survey
+Question' as if you are the person described in the 'Persona Profile' (which
+consists of their past survey responses)"*, the separator *"Please respond as
+the persona described above"*, and `persona_prompt_header` still supplied. Their
+control was told to imitate a person described in a profile that was not there.
+
+One detail is not recoverable: whether that header line was actually *printed*
+when the body was empty. The config supplies the string; the code that decided
+is the unpublished file. Worth asking the authors.
+
+**Why `upstream` is our default.** Exactly one variable differs between arms, so
+any outcome difference is attributable to the persona alone, and your control
+numbers stay comparable to the published ones.
+
+**Why it is arguably a confound.** A model instructed to imitate someone it was
+never shown is handicapped, not merely uninformed. If that depresses control
+performance, the twin-minus-control gap is inflated.
+
+**Where that cuts is the interesting part.** Peng et al. report that twins are
+*"only modestly more accurate than those of a homogeneous base LLM."* If their
+control was handicapped by incoherent instructions, their headline is
+**conservative** — the true twin advantage over a fairly-prompted baseline would
+be smaller still. Their negative finding survives the criticism and is
+strengthened by it.
+
+**So the difference between the two wordings is itself measurable.** Running the
+control arm both ways tells you how much of the "base LLM" benchmark is prompt
+artifact rather than model capability. As far as we can tell nobody has reported
+this. It is one extra arm on data you already have:
+
+```bash
+# control, upstream wording (default) — comparable to the paper
+python -m kli.run_simulation --config configs/my_study_control.yaml
+
+# control, neutral wording — add `control_wording: neutral` under LLM_simulation
+python -m kli.run_simulation --config configs/my_study_control_neutral.yaml
+```
+
+Under `upstream` the run prints a note recording the choice, so it cannot be
+discovered only by reading source six months later. Under `neutral`, an explicit
+`system_instruction` in the config that still mentions a persona raises a warning
+— that combination means the label and the behavior have come apart. Either way
+the exact strings are written into `run_manifest.json`.
+
+The full argument lives in `kli/assemble_prompts.py` under "control-arm
+wording".
 
 ### What each run leaves behind
 

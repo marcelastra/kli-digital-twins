@@ -16,6 +16,7 @@ from kli.assemble_prompts import (
     assemble_prompt,
     check_arm_consistency,
     extract_pid,
+    resolve_arm_wording,
 )
 from kli.parse_responses import ValidationFailure, apply_responses, validate_answers
 from kli.providers.local import (
@@ -310,23 +311,105 @@ class TestNoPersonaControl:
         with pytest.raises(ValueError, match="control observation"):
             assemble_prompt(question_prompt="Q", persona_text=None)
 
-    def test_warns_when_control_wording_presupposes_a_persona(self) -> None:
+    def test_no_warning_under_upstream_wording(self) -> None:
+        """Upstream wording is the deliberate default, not a mistake.
+
+        Peng et al. kept the persona-arm strings in their control arm -- so a
+        persona-referencing instruction there is the intended design, covered by
+        the printed note rather than a warning.
+        """
+        assert not check_arm_consistency(
+            empty_persona=True,
+            system_instruction="Answer as that person would.",
+            control_wording="upstream",
+        )
+
+    def test_warns_when_neutral_is_defeated_by_an_override(self) -> None:
+        """Asking for a neutral control and getting upstream wording anyway."""
         warnings = check_arm_consistency(
             empty_persona=True,
             system_instruction="Answer as that person would.",
+            control_wording="neutral",
         )
         assert warnings and "that person" in warnings[0]
 
-    def test_no_warning_for_neutral_control_wording(self) -> None:
+    def test_no_warning_for_genuinely_neutral_wording(self) -> None:
         assert not check_arm_consistency(
             empty_persona=True,
             system_instruction="Answer the survey questions.",
+            control_wording="neutral",
         )
 
     def test_no_warning_for_the_persona_arm(self) -> None:
         assert not check_arm_consistency(
             empty_persona=False, system_instruction="Answer as the persona."
         )
+
+
+class TestControlWordingModes:
+    """The upstream-vs-neutral choice, and that the default reproduces upstream."""
+
+    def test_default_is_upstream(self) -> None:
+        resolved = resolve_arm_wording(empty_persona=True)
+        assert resolved["control_wording"] == "upstream"
+
+    def test_upstream_keeps_persona_arm_strings(self) -> None:
+        """Exactly what Peng et al. did: only the persona flag changes."""
+        treatment = resolve_arm_wording(empty_persona=False)
+        control = resolve_arm_wording(
+            empty_persona=True, control_wording="upstream"
+        )
+        assert control["separator"] == treatment["separator"]
+        assert control["system_instruction"] == treatment["system_instruction"]
+        assert control["persona_header"] == treatment["persona_header"]
+        assert control["persona_wording"] is True
+
+    def test_neutral_replaces_persona_referencing_strings(self) -> None:
+        treatment = resolve_arm_wording(empty_persona=False)
+        control = resolve_arm_wording(empty_persona=True, control_wording="neutral")
+        assert control["separator"] != treatment["separator"]
+        assert control["system_instruction"] != treatment["system_instruction"]
+        assert control["persona_wording"] is False
+        assert "persona" not in control["system_instruction"].lower()
+
+    def test_upstream_mode_prints_a_note(self) -> None:
+        """The design choice should not be discoverable only by reading code."""
+        resolved = resolve_arm_wording(empty_persona=True)
+        assert resolved["note"] and "Peng et al." in resolved["note"]
+
+    def test_neutral_mode_prints_no_note(self) -> None:
+        assert resolve_arm_wording(
+            empty_persona=True, control_wording="neutral"
+        )["note"] is None
+
+    def test_persona_arm_prints_no_note(self) -> None:
+        resolved = resolve_arm_wording(empty_persona=False)
+        assert resolved["note"] is None
+        assert resolved["control_wording"] is None
+
+    def test_explicit_override_wins_in_either_mode(self) -> None:
+        for mode in ("upstream", "neutral"):
+            resolved = resolve_arm_wording(
+                empty_persona=True,
+                control_wording=mode,
+                system_instruction="MY INSTRUCTION",
+            )
+            assert resolved["system_instruction"] == "MY INSTRUCTION"
+
+    def test_rejects_unknown_mode(self) -> None:
+        with pytest.raises(ValueError, match="upstream' or 'neutral"):
+            resolve_arm_wording(empty_persona=True, control_wording="whatever")
+
+    def test_questions_identical_under_both_wordings(self) -> None:
+        """Only the opening sentence may differ; the questions never do."""
+        refs = _refs([MC, MATRIX])
+        with_persona, skel_a = build_question_prompt(refs, persona_wording=True)
+        without, skel_b = build_question_prompt(refs, persona_wording=False)
+        assert skel_a == skel_b
+        marker = "Q1. [QuestionID: QID1]"
+        assert with_persona[with_persona.index(marker) :] == without[
+            without.index(marker) :
+        ]
 
 
 class TestEgressGuard:

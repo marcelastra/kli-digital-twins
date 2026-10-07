@@ -293,13 +293,9 @@ _OPENING_WITH_PERSONA = (
     "Answer every question below as the person described above would answer it."
 )
 
-#: Control-arm opening. The persona-arm wording ("as the person described
-#: above") is incoherent when no persona is supplied, and a model told to
-#: imitate someone it was never shown is a confound rather than a clean
-#: baseline. The control therefore asks for a plain answer. This is the ONLY
-#: wording difference between the arms, and
-#: :func:`kli.assemble_prompts.check_arm_consistency` plus the run manifest
-#: both record it so it can be stated in a methods section.
+#: Alternative opening, used only when ``control_wording: neutral``. See the
+#: "control-arm wording" discussion in :mod:`kli.assemble_prompts` -- the
+#: default is to keep the persona-arm wording, matching upstream.
 _OPENING_NO_PERSONA = "Answer every question below."
 
 _INSTRUCTIONS = """\
@@ -334,7 +330,7 @@ def build_question_prompt(
     refs: Iterable[QuestionRef],
     *,
     include_reasoning: bool = False,
-    persona_present: bool = True,
+    persona_wording: bool = True,
 ) -> tuple[str, dict[str, Any]]:
     """Render a set of questions into a prompt plus the expected skeleton.
 
@@ -343,10 +339,14 @@ def build_question_prompt(
             :func:`kli.survey_tree.walk_questions`. Descriptive elements are
             rendered as context and given no answer slot.
         include_reasoning: Request a one-sentence rationale per question.
-        persona_present: False in the no-persona control arm. Only the opening
-            sentence changes; every question, option list and skeleton entry is
-            byte-identical across arms, which is what makes the two runs
-            comparable. See :data:`_OPENING_NO_PERSONA`.
+        persona_wording: Whether the opening sentence should refer to a
+            persona. This controls **wording only**, never whether a persona is
+            actually supplied -- that is ``empty_persona`` in
+            :func:`kli.assemble_prompts.assemble_prompt`. The default (True) is
+            used in both arms under ``control_wording: upstream``, which is how
+            Peng et al. ran it. Only the opening sentence is affected; every
+            question, option list and skeleton entry is byte-identical across
+            arms either way.
 
     Returns:
         ``(prompt_text, skeleton)`` where ``skeleton`` maps each ``Qn`` label to
@@ -367,7 +367,7 @@ def build_question_prompt(
             )
 
     instructions = _INSTRUCTIONS.format(
-        opening=_OPENING_WITH_PERSONA if persona_present else _OPENING_NO_PERSONA
+        opening=_OPENING_WITH_PERSONA if persona_wording else _OPENING_NO_PERSONA
     )
     if include_reasoning:
         instructions += _REASONING_NOTE

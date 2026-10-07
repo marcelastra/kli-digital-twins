@@ -44,15 +44,12 @@ from typing import Any
 from kli import __version__
 from kli.assemble_prompts import (
     DEFAULT_PERSONA_HEADER,
-    DEFAULT_SEPARATOR,
-    DEFAULT_SEPARATOR_NO_PERSONA,
-    DEFAULT_SYSTEM_INSTRUCTION,
-    DEFAULT_SYSTEM_INSTRUCTION_NO_PERSONA,
     assemble_prompt,
     check_arm_consistency,
     extract_pid,
     find_persona_files,
     load_persona,
+    resolve_arm_wording,
     summarize_arm,
 )
 from kli.config import ConfigError, get, load_config, section
@@ -78,6 +75,9 @@ class RunSettings:
     prompt_end: str | None
     system_instruction: str
     include_reasoning: bool
+    control_wording: str | None
+    persona_wording: bool
+    wording_note: str | None
     questions_per_call: int | None
     model: LocalModelConfig
     num_workers: int
@@ -132,17 +132,19 @@ class RunSettings:
         except (TypeError, ValueError):
             max_personas = -1
 
-        # Arm-aware defaults. An explicit value in the config always wins, but
-        # when the control arm is left to defaults it gets wording that does
-        # not refer to a persona it was never shown -- see
-        # kli/assemble_prompts.py. Both strings land in the run manifest so the
-        # exact difference between arms is on the record.
-        if empty_persona:
-            default_separator = DEFAULT_SEPARATOR_NO_PERSONA
-            default_system = DEFAULT_SYSTEM_INSTRUCTION_NO_PERSONA
-        else:
-            default_separator = DEFAULT_SEPARATOR
-            default_system = DEFAULT_SYSTEM_INSTRUCTION
+        # Resolve the arm's prompt strings. The DEFAULT for the control arm is
+        # 'upstream' -- it keeps the persona-arm wording, exactly as Peng et al.
+        # ran it, so results stay comparable to the published numbers. See the
+        # "control-arm wording" section of kli/assemble_prompts.py for why that
+        # is both the stricter design and arguably a confound, and why the
+        # difference between the two wordings is itself worth measuring.
+        wording = resolve_arm_wording(
+            empty_persona=empty_persona,
+            control_wording=str(sim.get("control_wording", "upstream")),
+            persona_header=combine.get("persona_prompt_header"),
+            separator=combine.get("persona_question_prompt_separator"),
+            system_instruction=sim.get("system_instruction"),
+        )
 
         return cls(
             question_json_dir=Path(
@@ -161,17 +163,14 @@ class RunSettings:
             ),
             persona_dir=Path(persona_dir) if persona_dir and not empty_persona else None,
             empty_persona=empty_persona,
-            persona_header=str(
-                combine.get("persona_prompt_header") or DEFAULT_PERSONA_HEADER
-            ).strip(),
-            separator=str(
-                combine.get("persona_question_prompt_separator") or default_separator
-            ).strip(),
+            persona_header=str(wording["persona_header"]).strip(),
+            separator=str(wording["separator"]).strip(),
             prompt_end=combine.get("combine_prompt_end") or None,
-            system_instruction=str(
-                sim.get("system_instruction") or default_system
-            ).strip(),
+            system_instruction=str(wording["system_instruction"]).strip(),
             include_reasoning=bool(questions.get("include_reasoning", False)),
+            control_wording=wording["control_wording"],
+            persona_wording=bool(wording["persona_wording"]),
+            wording_note=wording["note"],
             questions_per_call=(
                 int(sim["questions_per_call"])
                 if sim.get("questions_per_call")
@@ -301,7 +300,7 @@ def _simulate_one(
             question_prompt, skeleton = build_question_prompt(
                 chunk,
                 include_reasoning=settings.include_reasoning,
-                persona_present=not settings.empty_persona,
+                persona_wording=settings.persona_wording,
             )
             if not skeleton:
                 continue
@@ -418,10 +417,14 @@ def run(
             "no-persona control arm set 'empty_persona_prompt: true' instead."
         )
 
+    if settings.wording_note:
+        print(f"\nNOTE: {settings.wording_note}\n")
+
     for warning in check_arm_consistency(
         empty_persona=settings.empty_persona,
         system_instruction=settings.system_instruction,
         separator=settings.separator,
+        control_wording=settings.control_wording or "upstream",
     ):
         print(f"WARNING: {warning}", file=sys.stderr)
 
@@ -486,12 +489,18 @@ def run(
         "mode": mode,
         "arm": arm,
         "empty_persona_control": settings.empty_persona,
+        "control_wording": settings.control_wording,
         "include_reasoning": settings.include_reasoning,
         "questions_per_call": settings.questions_per_call,
         "on_failure": settings.on_failure,
         "system_instruction": settings.system_instruction,
         "separator": settings.separator,
-        "persona_header": None if settings.empty_persona else settings.persona_header,
+        "persona_header": (
+            None
+            if (settings.empty_persona and not settings.persona_wording)
+            else settings.persona_header
+        ),
+        "persona_wording_refers_to_persona": settings.persona_wording,
         "model": settings.model.manifest(),
         "model_health": health,
         "participants_attempted": len(paths),

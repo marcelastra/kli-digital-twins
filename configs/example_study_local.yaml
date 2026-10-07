@@ -60,12 +60,6 @@ text_simulation:
     # persona withheld. Run both. Without the control you cannot distinguish
     # "the model captured this individual" from "the model captured the
     # population average", and the published evidence says that gap is small.
-    #
-    # Leave persona_prompt_header / persona_question_prompt_separator /
-    # system_instruction unset and the control arm gets wording that does not
-    # presuppose a persona it was never shown. Set them explicitly and you own
-    # that choice -- the run will warn, and the exact strings are recorded in
-    # run_manifest.json.
     empty_persona_prompt: false
 
     # persona_prompt_header: |
@@ -78,9 +72,44 @@ text_simulation:
     question_json_base_dir: data/my_study/response_json
     output_updated_questions_dir: runs/my_study/response_json_llm_imputed
 
-    # Leave unset to get the arm-aware default (recommended). See above.
+    # ---------------------------------------------------------------------
+    # CONTROL-ARM WORDING. Only matters when empty_persona_prompt is true.
+    #
+    #   upstream  (default) -- keep every persona-arm string in the control,
+    #                          exactly as Peng et al. ran it. Verified across
+    #                          all 76 of their released empty_persona configs:
+    #                          the ONLY change from the persona arm is the
+    #                          empty_persona_prompt flag. Their control was
+    #                          therefore told to imitate "the person described
+    #                          in the 'Persona Profile'" with no profile
+    #                          present.
+    #   neutral             -- replace the persona header, separator and
+    #                          opening sentence with wording that does not
+    #                          presuppose a persona.
+    #
+    # Why upstream is the default: exactly one variable differs between arms,
+    # so your control numbers are comparable to the published ones.
+    #
+    # Why it is arguably a confound: a model told to imitate someone it was
+    # never shown may be handicapped rather than merely uninformed, which would
+    # INFLATE the twin-minus-control gap. Note where that cuts -- Peng et al.
+    # found the gap was small anyway, so if their control was handicapped their
+    # negative finding is conservative, not overstated.
+    #
+    # WORTH DOING: run the control arm BOTH ways. The difference between them
+    # measures how much of the "base LLM" benchmark is prompt artifact rather
+    # than model capability. As far as we can tell nobody has reported this,
+    # and it is one extra arm on data you already have.
+    #
+    # Full argument: kli/assemble_prompts.py, "control-arm wording".
+    control_wording: upstream
+    # ---------------------------------------------------------------------
+
+    # Leave unset to get the arm-aware default for whichever wording mode is
+    # selected above. An explicit value here always wins, in either mode.
     # system_instruction: |
-    #   You are simulating a specific survey respondent. ...
+    #   You are an AI assistant. Your task is to answer the 'New Survey
+    #   Question' as if you are the person described in the 'Persona Profile'...
 
     LLM_config:
       # Only "local" is supported. Participant survey responses stay on this
