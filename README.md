@@ -19,17 +19,63 @@ See [`ATTRIBUTION.md`](ATTRIBUTION.md) for file-by-file provenance and commits.
 
 ## Status at a glance
 
-| Stage | Source | Status |
-|---|---|---|
-| 1. QSF → survey template JSON | mega-study | ✅ Works |
-| 2. Qualtrics CSV → per-participant response JSON | mega-study | ✅ Works, with caveats |
-| 3. Persona JSON → persona text | demo | ⚠️ Works on HF-format input; needs an adapter for ours |
-| 4. Question JSON → prompt | demo | ⚠️ **Needs the schema adapter** |
-| 5. Persona + question → final prompt | demo | ⚠️ Works; no empty-persona arm |
-| 6. LLM execution | demo | ⚠️ Works for OpenAI; config schema differs |
-| 7. LLM output → response JSON | demo | ⚠️ **Needs the schema adapter** |
-| 8. Response JSON → analysis CSV | *neither* | ❌ **Not implemented** |
-| 9. Metrics and meta-analysis | mega-study | ✅ Works, ~40 lines per study |
+| Stage | Implementation | Source | Status |
+|---|---|---|---|
+| 1. QSF to survey template JSON | `processing_qualtrics_qsf/` | mega-study | Vendored, works |
+| 1b. **Validate ingestion** | `kli/reconcile.py` | **KLI** | **Original** |
+| 2. Qualtrics CSV to response JSON | `processing_qualtrics_csv/` | mega-study | Vendored, works |
+| 3. Persona JSON to persona text | `text_simulation/` | demo | Vendored |
+| 4. Question JSON to prompt | `kli/render_questions.py` | **KLI** | **Original** |
+| 5. Persona + question to prompt | `kli/assemble_prompts.py` | **KLI** | **Original**, incl. control arm |
+| 6. Local model execution | `kli/providers/local.py` | **KLI** | **Original** |
+| 7. Model output to response JSON | `kli/parse_responses.py` | **KLI** | **Original** |
+| 8. Response JSON to analysis CSV | `kli/responses_to_csv.py` | **KLI** | **Original** |
+| 9. Metrics and meta-analysis | `mega_study_evaluation/` | mega-study | Vendored, ~40 lines per study |
+
+**Everything original is under `kli/` and `tests/`.** Nothing in `kli/` imports
+from `text_simulation/`, so the authorship boundary is enforced by the code's own
+structure rather than only by documentation. Every original file carries an
+`ORIGINAL WORK (Kravis Leadership Institute)` line in its module docstring.
+[`ATTRIBUTION.md`](ATTRIBUTION.md) has the file-by-file table for your appendix.
+
+### What we had to write, and why
+
+Four gaps in the upstream releases, in the order they bite.
+
+**The schema adapter** (`kli/survey_tree.py`). The two upstream repos describe a
+survey differently: the Qualtrics stage emits a dict whose `Elements` nest
+`Branch`, `Randomizer` and `Group` containers, while the twin-construction code
+expects a flat top-level list of blocks. More seriously, upstream numbers
+questions `Q1..Qn` in one walk and then re-walks independently to parse answers,
+with no question-ID round trip, so any divergence silently attaches every later
+answer to the wrong question. Here there is exactly one traversal, both sides use
+it, and every answer's echoed `QuestionID` is verified against the question
+actually asked.
+
+**The no-persona control** (`kli/assemble_prompts.py`). Upstream's configs all
+carry `empty_persona_prompt`, but no code reads it, and
+`create_text_simulation_input.py:57` requires a matching persona file per
+participant, which makes a persona-free prompt unreachable by construction.
+Without this arm you cannot separate "the model captured this individual" from
+"the model captured the population average".
+
+**The analysis CSV** (`kli/responses_to_csv.py`). Exists in neither repository.
+
+**A local model provider** (`kli/providers/local.py`). Upstream is OpenAI-first.
+Participant survey responses stay on this machine.
+
+### Verified against real data
+
+Developed and tested against genuine Qualtrics output, not synthetic fixtures.
+Running stages 1-2 over three upstream studies produced **1,654 real
+per-participant response files** (`story_beliefs` 251, `accuracy_nudges` 1,003,
+`junk_fees` 400), spanning flat documents and documents nested three levels deep
+through Randomizer, Group and Branch containers, and covering all six question
+types the parser emits. The traversal's invariants hold across all three, the
+renderer handles every question in all three, and a stub-model run reaches 100%
+imputation end to end through to the analysis CSV. **81 tests pass**
+(`python -m pytest tests/ -v`); upstream has no test coverage for any of these
+stages.
 
 ---
 
@@ -51,35 +97,35 @@ known to work well — and the control arms below are what make that testable.
 ## Pipeline
 
 ```
-  your_survey.qsf ──[1: parse_qsf.py]──────────────► survey_flow.json
-                                                            │
-  your_responses.csv ─[2: get_responses.py]◄────────────────┘
-                           │
-                           ▼
-                 pid_<id>_response.json          ← per participant
-                           │
-   persona JSON ─[3: batch_convert_personas.py]──► persona .txt
-                           │
-                           ├─[4: convert_question_json_to_text.py]──► question prompts
-                           │
-                           └─[5: create_text_simulation_input.py]───► combined prompts
-                                                                            │
-                                         [6: run_LLM_simulations.py]────────┘
-                                                      │
-                                         [7: postprocess_responses.py]
-                                                      │
-                                                      ▼
-                                      response_json_llm_imputed/
-                                                      │
-                                    [8: convert_responses_to_csv.py]   ← NOT IMPLEMENTED
-                                                      │
-                                                      ▼
-                                  [9: mega_study_evaluation/]  →  metrics
+  your_survey.qsf --[1: parse_qsf.py]-------------> survey_flow.json
+                                                          |
+  your_responses.csv -[2: get_responses.py]<--------------+
+                           |
+                           +--[1b: kli.reconcile]--> what got dropped, and why
+                           v
+                 pid_<id>_response.json            <- per participant
+                           |
+   persona .txt -[3: batch_convert_personas.py]----> persona text
+                           |
+                           +--[4: kli.render_questions]--> prompts + JSON skeleton
+                           |
+                           +--[5: kli.assemble_prompts]--> final prompts
+                                                            (or no-persona control)
+                                        |
+                       [6: kli.providers.local]  <-- Mistral, on this machine
+                                        |
+                       [7: kli.parse_responses]  <-- verified, flagged
+                                        v
+                        response_json_llm_imputed/
+                                        |
+                       [8: kli.responses_to_csv]
+                                        v
+                      consolidated_llm_values.csv  ->  [9: mega_study_evaluation/]
 ```
 
-A persona is structurally just a filled-in survey response file — the same
-block/question/answer schema as stage 2's output. So your personas come from
-running your own Qualtrics data through stages 1–2 and nothing else.
+Stages 4 through 8 run from one command (`kli.run_simulation`), then stage 8
+separately. A persona is structurally just a filled-in survey response file, so
+your personas come from running your own Qualtrics data through stages 1-2.
 
 ---
 
@@ -88,134 +134,114 @@ running your own Qualtrics data through stages 1–2 and nothing else.
 ```bash
 git clone <this repo> && cd kli-digital-twins
 poetry install
-
-# API key
-echo "OPENAI_API_KEY=sk-..." > .env
-
-# Optional: the upstream Twin-2K-500 dataset, for calibration against
-# published numbers. Not needed to run on your own data.
-poetry run python download_dataset.py
+python -m pytest tests/ -q          # 81 tests, no model or network needed
 ```
 
-Scaffold a study:
+### The local model
 
 ```bash
-poetry run python scripts/setup_study.py \
-    --study my_study \
-    --qsf  path/to/your_survey.qsf \
-    --csv  path/to/your_responses.csv \
-    --dry_run     # prints the config it would write; drop this to commit it
+# install Ollama from https://ollama.com, then:
+ollama pull mistral        # ~4.1 GB, Mistral 7B Instruct
+ollama serve               # usually already running
+
+# confirm this pipeline can see it:
+python -m kli.run_simulation --config configs/example_study_local.yaml --health-check
 ```
 
-Then run the two stages that work today:
+Nothing leaves your machine. `kli/providers/local.py` resolves the configured
+endpoint and refuses to send anything unless every resolved address is loopback.
+Lifting that requires `allow_remote_endpoint: true` in the config, which is
+recorded in every run manifest. Note the scope of the claim: it constrains this
+pipeline's model calls, not your whole system, and it cannot stop a local server
+that has itself been configured to proxy elsewhere. For an auditable guarantee,
+block outbound traffic at the host level too.
+
+### Run a study
 
 ```bash
-poetry run python processing_qualtrics_qsf/parse_qsf.py  --config configs/my_study/my_study.yaml
-poetry run python processing_qualtrics_csv/get_responses.py --config configs/my_study/my_study.yaml
+# 1-2. ingest your Qualtrics export
+python processing_qualtrics_qsf/parse_qsf.py     --config configs/my_study.yaml
+python processing_qualtrics_csv/get_responses.py --config configs/my_study.yaml
+
+# 1b. ALWAYS DO THIS. Reports questions silently dropped during ingestion.
+#     Exits 1 if it finds suspected display-logic loss, so it can gate a script.
+python -m kli.reconcile --config configs/my_study.yaml
+
+# 3. render personas (vendored; variant: full | summary | demographic)
+python text_simulation/batch_convert_personas.py \
+    --persona_json_dir data/my_study/response_json \
+    --output_text_dir  data/my_study/persona_text \
+    --variant full
+
+# 4-7. build prompts, call the local model, write imputed JSON.
+#      Work up in this order: look at the prompts, then prove the plumbing
+#      offline, then run small, then run everything.
+python -m kli.run_simulation --config configs/my_study.yaml --dry-run --limit 3
+python -m kli.run_simulation --config configs/my_study.yaml --stub-model --limit 3
+python -m kli.run_simulation --config configs/my_study.yaml --limit 20
+python -m kli.run_simulation --config configs/my_study.yaml
+
+# 8. analysis CSV, aligned to your human export
+python -m kli.responses_to_csv --config configs/my_study.yaml
 ```
 
-Inspect the output before going further. See "Validate your ingestion" below —
-this is the step most likely to fail quietly.
+`--stub-model` fills the response skeleton from the instrument itself, with no
+model and no network. A stub run should reach **100% imputation**; anything less
+is a bug in this pipeline rather than a limitation of the model. It is a test of
+plumbing, never of accuracy.
+
+### Run both arms
+
+```bash
+# treatment: empty_persona_prompt: false
+python -m kli.run_simulation --config configs/my_study.yaml
+
+# control:   empty_persona_prompt: true, outputs re-rooted elsewhere
+python -m kli.run_simulation --config configs/my_study_control.yaml
+```
+
+Same participants, same questions, same model, persona withheld. The question
+section of the prompt is byte-identical between arms; the only wording that
+differs is the opening sentence, because telling a model to answer "as the
+person described above" when no person is described is a confound rather than a
+clean baseline. Both strings are written into `run_manifest.json` so the exact
+difference is on the record.
+
+### What each run leaves behind
+
+`run_manifest.json`, beside the imputed JSON: model, temperature, arm, chunk
+size, whether the endpoint was loopback, the full system instruction and
+separator, the imputation rate, and per-participant errors. Cite it rather than
+reconstructing settings from memory.
+
+`imputation_report.csv` and `conversion_report.json`, from stage 8: per
+participant, how many questions the model actually answered; and which reference
+columns were never filled.
 
 ---
 
 ## What you still have to write
 
-Four items, in dependency order. Together they are a few days of work, not a
-research project.
+The four gaps are closed. What remains is study-specific.
 
-### 1. The schema adapter (highest priority, highest risk)
+**Question types beyond the six.** `kli/render_questions.py` covers `MC`
+(single and multi), `Matrix`, `Slider`, `TE` (SL/ML/ESTB/FORM), `CS`, and `DB`
+as context. Rank-order (`RO`) and side-by-side (`SBS`) are not supported, and
+they crash the *vendored QSF parser* before they ever reach the renderer. If
+your instrument has them, either list the QIDs under `exclude_questions` or add
+support in three places: a branch in `describe_question`, a branch in
+`answer_skeleton`, and a validator in `kli/parse_responses.py::validate_answers`.
+`UnsupportedQuestionType` names all three when it fires.
 
-The seam between the two upstream repos does not currently join.
+**Your DVs for the evaluation layer.** Copy `mega_study_evaluation/_template_study/`
+and edit six things — see the Evaluation section.
 
-- **What stage 2 produces:** `pid_<id>_response.json` — a **dict** of
-  `{Metadata, Elements, EmbeddedData}`, where `Elements` nests `Block`,
-  `Branch`, `Randomizer`, and `Group` containers.
-- **What stages 4 and 7 expect:** a flat **top-level list of Blocks**. See
-  `text_simulation/convert_question_json_to_text.py:281`
-  (`for element in data: ## data is a list of blocks`) and
-  `text_simulation/postprocess_responses.py:235`.
+**A DV range table** if you want `post_metric_calculation` metrics: rows of
+`(study_name, DV_variable, DV_min, DV_max)`, joined on the *display* study name.
 
-Handed your files, those two scripts iterate dict keys and raise
-`AttributeError`.
-
-The recursion you need **already exists in this repo**:
-`text_simulation/convert_persona_to_text.py:233–238` handles the
-`{"Elements": ...}` dict form, and lines 187–188 recurse into `Branch`. It was
-simply never propagated to the question path.
-
-> **⚠️ Do this as ONE shared traversal function, used by both the prompt
-> builder and the postprocessor.**
->
-> The binding between prompt and response is **purely positional**. The prompt
-> builder numbers questions `Q1..Qn` as it walks the JSON; the postprocessor
-> re-walks the same structure with its own counter and looks up
-> `response["Q{count}"]`. There is no question-ID round trip. If the two
-> traversals ever diverge — a Randomizer handled differently, a skipped
-> descriptive block — then **every answer after the divergence is silently
-> misassigned to the wrong question.** No error is raised. This is the single
-> most dangerous property of the vendored code.
->
-> Fixing it properly means emitting the question ID alongside each `Qn` and
-> asserting the round-trip on parse. Do that and you remove a whole class of
-> silent corruption.
-
-Also parameterize the hardcoded filename patterns while you are in there:
-`*_wave4_Q_wave4_A.json` at `convert_question_json_to_text.py:316` and
-`postprocess_responses.py:278`, and the `pid_\d+` regexes at
-`run_LLM_simulations.py:121`, `create_text_simulation_input.py:27`, and
-`postprocess_responses.py:321` (which require purely numeric participant IDs).
-
-### 2. `text_simulation/convert_responses_to_csv.py`
-
-Exists in neither upstream repo. The full specification is in that file's
-docstring. In brief: read the imputed response JSONs, derive the target column
-schema from your *human* response CSV's ImportId header row, and emit
-`consolidated_llm_values.csv` and `consolidated_llm_labels.csv` — the filenames
-`mega_study_evaluation/common/data_loader.py` expects.
-
-Do **not** reuse `evaluation/column_mapping.csv` for this. Those 42 rows are
-specific to the upstream wave-4 instrument and are meaningless for your survey.
-
-### 3. Question-type coverage
-
-`text_simulation/convert_persona_to_text.py::format_question_text` raises
-`ValueError` on anything outside `MC`, `Matrix`, `TE`, `Slider`, `DB`. The
-Qualtrics parser in stage 1 also emits `CS` (constant sum), and will crash on
-rank-order items for an unrelated reason (see below).
-
-Each new type needs three things, and the third is easy to forget:
-
-1. a `_format_question_text_<Type>` formatter in `convert_persona_to_text.py`
-2. a validator in `postprocess_responses.py::validation_functions`
-3. a response-schema block in **both** copies of
-   `convert_question_json_to_text.py::format_instructions` — the
-   `include_reasoning=True` and `False` variants are a copy-paste fork, not a
-   parameterization, so edits must be made twice
-
-Note an existing instance of exactly this bug: the prompt schema documents four
-types but the formatter emits five labels, and `"Multiple Choice"` (multi-select)
-has **no schema and no validator**. Multi-select questions therefore fail
-validation 100% of the time and burn every retry. Fix that first if your
-instrument has any.
-
-This is the natural point to refactor into the `question_formatters/` package
-the `Snakefile` expects.
-
-### 4. The empty-persona control arm
-
-`empty_persona_prompt` has no code path anywhere in the vendored code.
-`create_text_simulation_input.py:57` requires a matching persona file per
-participant ID, so there is no way to emit a persona-free prompt.
-
-This is ~15 lines, and **it is the most important 15 lines in the project.**
-Without the empty-persona and demographics-only controls you cannot distinguish
-"the twin captures this individual" from "the LLM captures this population" —
-which, given the upstream finding that twins barely beat a persona-free
-baseline, is the claim a reviewer will press hardest. Write it before you run
-anything at scale.
-
----
+**Prompt wording for your population.** The defaults in
+`kli/assemble_prompts.py` are reasonable but generic. If you change them, change
+them for both arms and record it.
 
 ## Inherited defects
 
@@ -251,6 +277,15 @@ the branch is always taken.
 and text-form extractors pad missing cells with `None` to preserve positional
 alignment; Matrix and Slider do not. On a partial response `Answers.Values` is
 shorter than `Statements`, with no index to recover the alignment.
+
+**Multi-select questions produce no columns at all through `json2csv.py`.**
+`evaluation/json2csv.py::_process_mc_multiple_numeric` reads
+`answer_data["Selected"]`, but `processing_qualtrics_csv/question_types/mc_question_extractor.py`
+writes `SelectedByPosition` and `SelectedText`. The key never matches, so every
+multi-select answer is dropped, silently, for humans and twins alike. This is
+why `kli/responses_to_csv.py` does its own extraction and reads both field
+names. If you use `json2csv.py` directly for anything, check whether your
+instrument has multi-selects first.
 
 **Failed questions retain the human answer, unflagged.**
 `postprocess_responses.py` writes the output file *before* returning failure,
@@ -320,25 +355,45 @@ vendored here, but the notebooks in the demo repo do the same.
 
 ## Validate your ingestion
 
-Upstream has **no test coverage** for either Qualtrics subsystem: no `tests/`,
-no schema validation of outputs, no reconciliation that every CSV ImportId was
-consumed, no report of dropped questions. The only test is a six-case
-self-check inside `logic_eval.py`, and all six exercise `EmbeddedField` —
-which is exactly why the display-logic defect above went unnoticed.
+Neither upstream repo has test coverage for the Qualtrics subsystems: no
+`tests/`, no schema validation of outputs, no reconciliation that every CSV
+column was consumed, no report of dropped questions. `save_output` is a bare
+`json.dump`. The only test for that layer is a six-case self-check inside
+`logic_eval.py`, and all six exercise `EmbeddedField` -- which is precisely why
+the display-logic defect went unnoticed.
 
-**Write a reconciliation step before trusting any output.** Roughly thirty
-lines, reporting per participant:
+`kli/reconcile.py` closes that gap. Run it after stage 2, every time:
 
-- how many questions were dropped, and why — display-logic-false vs. no
-  matching answer vs. unsupported type
-- which ImportIds in the CSV were never consumed
-- which questions have `Answers` arrays whose length disagrees with their
-  `Rows` / `Statements` / `Options`
+```bash
+python -m kli.reconcile --config configs/my_study.yaml
+```
 
-This single check surfaces most of the silent failures listed above. Do it
-first, and cite it in your methods appendix.
+It compares the parsed survey template against the per-participant files and
+reports how many participants retained each question. A question that is in the
+template, carries display logic, and survives for *nobody* is the signature of
+the display-logic defect. It exits 1 when it finds that pattern, so you can gate
+a pipeline script on it.
 
----
+**How bad this actually is.** Running it against upstream's own `junk_fees`
+study with their hand-written workaround removed: **49 of 117 questions -- 42%
+of the instrument -- disappear for all 400 participants**, with no error and no
+warning. That is what the defect costs when nobody is checking. The workaround
+is per-question and goes in the config:
+
+```yaml
+qsf_to_json:
+  revise_questions:
+    QID123: {DisplayLogic: null}
+csv_to_fill_answers:
+  keep_questions_when_answer_missing: ["QID123"]
+```
+
+`kli.reconcile` prints exactly this snippet, pre-filled with your QIDs.
+
+Note what the workaround does and does not do: it stops the question being
+deleted, but it does not reconstruct who should have seen it. If a question was
+genuinely only shown to some participants, you still need to decide what a
+missing answer means for that subgroup, and say so in your methods.
 
 ## Evaluation
 
@@ -420,43 +475,72 @@ unpublished simulation layer is reconstructible at all.
 
 ## Reproducibility statement for the paper
 
-Suggested language, adjust as needed:
+Suggested language. Adjust, but keep the four disclosures: what was vendored,
+what was written here, that the models ran locally, and the upstream benchmark.
 
-> Our pipeline adapts two public implementations released alongside the
+> Our pipeline combines two public implementations released alongside the
 > Twin-2K-500 dataset (Toubia et al., arXiv:2505.17479) and the Twin-2K-500
 > Mega-Study (Peng et al., arXiv:2509.19088). Qualtrics survey ingestion and
-> the evaluation stack derive from the Mega-Study repository; persona
-> rendering, prompt assembly, and LLM execution derive from the
-> digital-twin-simulation repository. The Mega-Study repository's
-> `text_simulation/` module — the twin-construction layer invoked by its
-> workflow definition — is not included in its public release; we therefore
-> use the earlier published implementation of that layer and reconstruct the
-> remaining components from the model and prompt parameters recorded in the
-> Mega-Study's released configuration files. Commit hashes for both upstream
-> sources, and a file-by-file statement of provenance and modification, are
-> recorded in our repository. We note that no multiple-comparison correction is
-> applied in the upstream metric stack, and that upstream reports an average
-> human–twin correlation of r = 0.20 on a persona substrate of ~500 items per
-> participant.
+> the evaluation stack derive from the Mega-Study repository; persona rendering
+> derives from the digital-twin-simulation repository. The Mega-Study
+> repository's `text_simulation/` module -- the twin-construction layer invoked
+> by its workflow definition -- is not included in its public release.
+>
+> We therefore implemented the following components ourselves: a canonical
+> survey traversal shared by prompt construction and response parsing, with
+> question-identifier verification on every answer; question rendering with an
+> explicit response schema, extended to constant-sum items; prompt assembly
+> including a no-persona control condition; a local model provider; response
+> parsing with per-question validation and explicit imputation flags; and the
+> conversion of simulated responses to an analysis dataset, a stage absent from
+> both public releases. These components, and the tests covering them, are
+> identified file by file in our repository.
+>
+> All model inference was performed locally (Mistral 7B Instruct via Ollama) on
+> institutional hardware. No participant survey responses were transmitted to
+> any third-party service at any stage. Our implementation refuses non-loopback
+> model endpoints by default, and each run records whether that constraint was
+> in force.
+>
+> Two methodological notes. First, no multiple-comparison correction is applied
+> in the upstream metric stack, and we report [corrected / descriptive]
+> statistics accordingly. Second, upstream reports an average human-twin
+> correlation of r = 0.20 on a persona substrate of roughly 500 items per
+> participant, which we treat as an upper reference point rather than a
+> target.
+
+If you used the display-logic workaround, add a sentence naming the affected
+questions and what a missing answer means for them. If you set
+`allow_remote_endpoint: true` at any point, the no-egress sentence above is not
+accurate as written and must be revised.
 
 ---
 
 ## Suggested first week
 
-1. Add a `TWIN_ID` column to your Qualtrics export. Run stages 1–2.
-2. Write the reconciliation check. **Look at what it reports** — especially
-   dropped conditional questions.
-3. Write the shared traversal adapter. Confirm prompt and parse agree on a
-   handful of participants by hand.
-4. Add the `empty_persona_prompt` branch.
-5. Run stages 3–7 on ~20 participants with a cheap model. Read the actual
-   prompts and the actual model output as text before scaling.
-6. Write `convert_responses_to_csv.py`.
-7. Copy `_template_study/`, define your DVs, and get one metric end to end.
+1. Add a `TWIN_ID` column to your Qualtrics export. Run stages 1-2.
+2. **Run `kli.reconcile` and read the output.** If it reports suspected
+   display-logic loss, fix that before anything else -- everything downstream
+   inherits it.
+3. `ollama pull mistral`, then `--health-check`.
+4. `--dry-run --limit 3` and **read an actual prompt end to end.** Does the
+   persona read like a person? Is the question legible? Is the JSON skeleton
+   right? This is the cheapest bug-catching in the whole project.
+5. `--stub-model --limit 3`. Expect 100% imputation. Anything less is a bug
+   here, not a model limitation.
+6. `--limit 20` against the real model. Read the model's actual answers as text.
+   Check the imputation rate in the manifest: if a question type is failing
+   systematically, tune `questions_per_call` down before scaling.
+7. Run both arms at `--limit 20` and compare. If the twin arm does not visibly
+   differ from the no-persona arm on your DVs at small N, find out why now
+   rather than after 2,000 participants.
+8. Stage 8, then copy `_template_study/`, define your DVs, and get one metric
+   end to end.
 
-Scale only after step 5 has been eyeballed by a human. The positional-binding
-defect and the display-logic defect both produce output that looks completely
-normal.
+Scale only after step 6 has been read by a human. The positional-binding hazard
+and the display-logic defect both produce output that looks entirely normal --
+the first is now structurally prevented and the second is now detected, but your
+own additions will not be.
 
 ---
 

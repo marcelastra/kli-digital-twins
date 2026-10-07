@@ -86,17 +86,61 @@ text_simulation/
   configs/openai_config.yaml
 ```
 
-### Newly written for this repository
+### Original work — written at KLI, not derived from either upstream
+
+**This is the section to cite in the paper's appendix.** Every file listed here
+is original. Each carries an `ORIGINAL WORK (Kravis Leadership Institute)` line
+in its module docstring, so authorship is checkable file by file without
+consulting this document.
+
+Everything original lives under `kli/` and `tests/`. Nothing in `kli/` imports
+from `text_simulation/`, so the boundary is enforced by the code's own
+structure, not only by documentation.
+
+| File | Lines | What it contributes |
+|---|---:|---|
+| `kli/survey_tree.py` | 343 | **The schema adapter**, and the structural fix for upstream's silent answer-misassignment hazard. One canonical traversal of the nested per-participant response document, shared by prompt construction and response parsing, with a QuestionID round-trip check. |
+| `kli/render_questions.py` | 431 | Renders questions into an answerable prompt with an explicit JSON skeleton. Adds constant-sum support, which the upstream renderer cannot handle at all. Adds chunking for small local models. |
+| `kli/assemble_prompts.py` | 292 | Persona and question assembly, including **the no-persona control arm** that upstream specifies in every config but never implements. Arm-aware wording plus a confound check. |
+| `kli/providers/local.py` | 447 | **Local model provider** (Mistral via Ollama, or any OpenAI-compatible local server) with a hard no-egress guard that refuses non-loopback endpoints before any request is made. |
+| `kli/parse_responses.py` | 436 | Model output back into the response-JSON schema, with per-question validation against the instrument, the round-trip check, and explicit imputation flags that prevent ground-truth leakage. |
+| `kli/responses_to_csv.py` | 593 | **The analysis CSV.** This pipeline stage exists in neither upstream repository. Derives its column schema from the study's own reference export. |
+| `kli/run_simulation.py` | 568 | Pipeline driver reading the nested config schema, with dry-run and offline stub modes and a per-run manifest. |
+| `kli/reconcile.py` | 290 | Post-ingestion validation. Detects the questions upstream silently drops to the display-logic defect. |
+| `kli/config.py` | 136 | Nested config reader; fails loudly on missing keys rather than silently defaulting. |
+| `kli/__init__.py`, `kli/providers/__init__.py` | 67 | Package docs and exports. |
+| `tests/test_survey_tree.py` | 234 | Traversal and round-trip invariants. |
+| `tests/test_pipeline.py` | 461 | Rendering, validation, control arm, egress guard, CSV extraction. |
+
+**Totals: ~3,600 lines of pipeline code and ~700 lines of tests, 81 tests
+passing.** Upstream has no test coverage for any of these stages.
+
+Also newly written:
 
 ```
 README.md                            # setup, pipeline, gaps, inherited defects
 ATTRIBUTION.md                       # this file
 NOTICE                               # Apache 2.0 §4(d) attribution notice
 .gitignore
-pyproject.toml                       # merged dependencies of both upstreams
+pyproject.toml                       # merged dependencies, plus local-model deps
 configs/README.md                    # real config documentation
-text_simulation/convert_responses_to_csv.py   # SPECIFIED STUB — not implemented
+configs/example_study_local.yaml     # worked config for the local-model pipeline
+text_simulation/convert_responses_to_csv.py   # shim forwarding to kli.responses_to_csv
 ```
+
+### Verification against real data
+
+The original components were developed and tested against genuine Qualtrics
+output, not synthetic fixtures. Running the vendored stages 1–2 over three of
+the upstream studies produced 1,654 real per-participant response files
+(`story_beliefs` 251, `accuracy_nudges` 1,003, `junk_fees` 400), spanning flat
+documents and documents nested three levels deep through Randomizer, Group and
+Branch containers, and covering all six question types the parser emits (MC,
+Matrix, Slider, TE, CS, DB).
+
+The traversal's invariants hold across all three; the renderer handles every
+question in all three; and a full stub-model run reaches 100% imputation end to
+end through to the analysis CSV. The data itself is not redistributed here.
 
 ## Statement of changes (Apache 2.0 §4(b))
 

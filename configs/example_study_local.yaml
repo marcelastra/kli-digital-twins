@@ -1,0 +1,139 @@
+# Example study config for the kli pipeline with a local model.
+#
+# Copy this per study and per specification arm. Keep one file per arm, and
+# re-root every output path so arms never overwrite one another -- that
+# convention is the cleanest thing in the upstream design.
+#
+# Generate the skeleton with:
+#   python scripts/setup_study.py --study my_study --qsf path/to.qsf --csv path/to.csv
+#
+# Key reference: configs/README.md
+
+# --- Stage 1: QSF -> survey template JSON (vendored, works as documented) ----
+qsf_to_json:
+  input_file: data/my_study/raw_data/survey.qsf
+  output_file: data/my_study/wave_qsf_json/survey_flow.json
+  exclude_blocks: null
+
+  # Escape hatch for question types the parser cannot handle. A single
+  # rank-order (RO) or side-by-side (SBS) item aborts the whole run with a
+  # ValueError naming the QID -- list it here and re-run.
+  # exclude_questions: ["QID123"]
+
+  # Workaround for the display-logic defect. `python -m kli.reconcile` tells you
+  # which QIDs need this; see the README.
+  # revise_questions:
+  #   QID123: {DisplayLogic: null}
+
+# --- Stage 2: CSV + template -> per-participant response JSON (vendored) -----
+csv_to_fill_answers:
+  input_survey_template: data/my_study/wave_qsf_json/survey_flow.json
+  input_csv_file: data/my_study/raw_data/response.csv
+  output_dir: data/my_study/response_json
+
+  # Use -1 only. Any other value is broken upstream: the dataframe index is
+  # reset, then sorted without resetting, then compared against the original
+  # index label, so `limit: 5` yields one file. Use `--limit` on the kli
+  # commands instead when you want a small test run.
+  limit: -1
+
+  # Questions to retain even when no answer matched. Needed alongside any
+  # `revise_questions` entry that nulls out DisplayLogic.
+  # keep_questions_when_answer_missing: ["QID123"]
+
+# --- Stages 3-8: the kli pipeline --------------------------------------------
+text_simulation:
+  questions_to_texts:
+    input_path: data/my_study/response_json
+    output_dir: runs/my_study/text_questions
+    # true asks the model for a one-sentence rationale per question. This is a
+    # distinct experimental arm, not a free improvement.
+    include_reasoning: false
+
+  create_text_simulation_input:
+    # Where persona .txt files live, one per participant (pid_<id>_*.txt).
+    persona_text_dir: data/my_study/persona_text
+    output_combined_prompts_dir: runs/my_study/prompts
+
+    # THE NO-PERSONA CONTROL ARM.
+    # false = twin condition. true = control: same participants, same questions,
+    # persona withheld. Run both. Without the control you cannot distinguish
+    # "the model captured this individual" from "the model captured the
+    # population average", and the published evidence says that gap is small.
+    #
+    # Leave persona_prompt_header / persona_question_prompt_separator /
+    # system_instruction unset and the control arm gets wording that does not
+    # presuppose a persona it was never shown. Set them explicitly and you own
+    # that choice -- the run will warn, and the exact strings are recorded in
+    # run_manifest.json.
+    empty_persona_prompt: false
+
+    # persona_prompt_header: |
+    #   ## Persona Profile (this individual's past survey responses):
+    # persona_question_prompt_separator: |
+    #   ## New Survey Question & Instructions (respond as the person described above):
+    # combine_prompt_end: null
+
+  LLM_simulation:
+    question_json_base_dir: data/my_study/response_json
+    output_updated_questions_dir: runs/my_study/response_json_llm_imputed
+
+    # Leave unset to get the arm-aware default (recommended). See above.
+    # system_instruction: |
+    #   You are simulating a specific survey respondent. ...
+
+    LLM_config:
+      # Only "local" is supported. Participant survey responses stay on this
+      # machine by design -- see kli/providers/local.py.
+      provider: local
+
+      # As the local server knows it. For Ollama: `ollama pull mistral`
+      model_name: mistral
+
+      # Must be loopback. A non-local endpoint is refused before any request is
+      # made, unless allow_remote_endpoint below is set.
+      base_url: http://localhost:11434
+
+      # "ollama" for /api/chat; "openai" for an OpenAI-compatible local server
+      # (llama.cpp, LM Studio, vLLM).
+      api_style: ollama
+
+      # 0.0 for the deterministic arm. Local models have no seed parameter here,
+      # so 0.0 is the only determinism lever available.
+      temperature: 0.0
+
+      max_tokens: 8192
+      max_retries: 5
+
+      # Local generation on CPU is slow. Raise rather than lower.
+      request_timeout: 900
+
+    # Answerable questions per model call. A 7B model given a full persona plus
+    # 60 questions will usually degrade -- dropping items, repeating answers --
+    # well before it overflows its context. null = whole survey in one call
+    # (upstream behavior).
+    questions_per_call: 10
+
+    # Local servers queue requests; more workers than cores rarely helps.
+    num_workers: 4
+
+    # "blank" (default): a question the model failed is left empty, so it reads
+    # as missing downstream. "keep_original" retains the human's answer --
+    # upstream's behavior, which puts real answers in a file labelled as model
+    # output. Both are flagged per question either way.
+    on_failure: blank
+
+    force_regenerate: false
+    max_personas: -1
+
+    # Lifts the no-egress guard and permits participant data to leave this
+    # machine. Keep false. Setting it is recorded in run_manifest.json and
+    # should be disclosed in your methods.
+    allow_remote_endpoint: false
+
+  convert_to_csv:
+    input_json_dir: runs/my_study/response_json_llm_imputed
+    # The HUMAN response CSV. Its ImportId header row defines the target
+    # column schema, so twin output lines up with human data column for column.
+    reference_csv_path: data/my_study/raw_data/response.csv
+    output_dir: runs/my_study/csv_output
