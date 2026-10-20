@@ -115,6 +115,7 @@ __all__ = [
     "DEFAULT_SYSTEM_INSTRUCTION",
     "DEFAULT_SYSTEM_INSTRUCTION_NO_PERSONA",
     "find_persona_files",
+    "scramble_persona_assignment",
     "load_persona",
     "assemble_prompt",
     "check_arm_consistency",
@@ -424,16 +425,92 @@ def check_arm_consistency(
     return warnings
 
 
-def summarize_arm(*, empty_persona: bool, persona_dir: str | Path | None) -> str:
+def summarize_arm(
+    *,
+    empty_persona: bool,
+    persona_dir: str | Path | None,
+    scrambled: bool = False,
+) -> str:
     """One-line description of the arm, for logs and run manifests.
 
     Args:
-        empty_persona: Whether this is the control arm.
+        empty_persona: Whether this is the no-persona control.
         persona_dir: Persona directory for persona arms.
+        scrambled: Whether personas were reassigned to other participants.
 
     Returns:
         A short label.
     """
     if empty_persona:
         return "empty_persona (control: no persona supplied)"
-    return f"persona from {persona_dir}"
+    if scrambled:
+        return f"scrambled_persona (control: mismatched personas from {persona_dir})"
+    return f"matched persona from {persona_dir}"
+
+
+def scramble_persona_assignment(
+    personas: dict[str, Path], *, seed: int = 42
+) -> dict[str, Path]:
+    """Reassign personas to participants, so no twin receives its own.
+
+    This builds the **scrambled-persona control**: every participant still gets
+    a full, real persona of the same richness and format, but one belonging to
+    somebody else.
+
+    Why it matters. The no-persona control tells you whether a persona helps at
+    all. It cannot tell you whether the help is *person-specific*. A persona
+    does two things at once: it supplies information about one individual, and
+    it broadens and anchors the model's response style in a way that may improve
+    correspondence for any participant. The scrambled arm separates those.
+    Holding persona presence, length and format fixed while destroying only the
+    person-to-persona pairing isolates the individuating signal:
+
+        twin minus scrambled   = genuine person-specific signal
+        scrambled minus empty  = benefit of having *a* persona at all
+
+    This mirrors the control Stojanov (2026) added at a reviewer's request,
+    assigning each persona a Big Five profile drawn from a different
+    participant. It proved decisive: random traits worsened mean correspondence
+    but modestly *improved* some error metrics, showing that part of the
+    apparent benefit of real traits was generic response broadening rather than
+    person-specific matching. Without that arm the improvement would have been
+    over-read.
+
+    The permutation is a derangement, so no participant can receive their own
+    persona by chance, and it is seeded so the assignment is reproducible and
+    reportable.
+
+    Args:
+        personas: Mapping of participant id to persona file.
+        seed: Seed for the permutation. Record it in your write-up.
+
+    Returns:
+        A mapping of the same keys to other participants' persona files.
+
+    Raises:
+        ValueError: If fewer than two personas are supplied, since a derangement
+            does not exist.
+    """
+    import random
+
+    ids = sorted(personas)
+    if len(ids) < 2:
+        raise ValueError(
+            "The scrambled-persona control needs at least 2 participants; "
+            f"got {len(ids)}."
+        )
+
+    rng = random.Random(seed)
+    shuffled = ids[:]
+    # Reject-and-retry is simple and, for n >= 2, terminates quickly: the
+    # probability that a random permutation is a derangement approaches 1/e.
+    for _ in range(1000):
+        rng.shuffle(shuffled)
+        if all(a != b for a, b in zip(ids, shuffled)):
+            break
+    else:
+        # Deterministic fallback: rotate by one, which is a derangement for any
+        # n >= 2.
+        shuffled = ids[1:] + ids[:1]
+
+    return {pid: personas[other] for pid, other in zip(ids, shuffled)}

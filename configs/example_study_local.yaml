@@ -62,6 +62,28 @@ text_simulation:
     # population average", and the published evidence says that gap is small.
     empty_persona_prompt: false
 
+    # SCRAMBLED-PERSONA CONTROL. Every participant gets a real persona of the
+    # same richness and format, but belonging to someone else (a seeded
+    # derangement, so nobody gets their own).
+    #
+    # Why run it: the no-persona arm tells you whether a persona helps at all,
+    # but not whether the help is person-SPECIFIC. A persona both supplies
+    # information about one individual and changes how the model responds in
+    # general. Holding persona presence and format fixed while destroying only
+    # the person-to-persona pairing separates the two:
+    #
+    #   matched - scrambled  = genuine person-specific signal
+    #   scrambled - empty    = benefit of having *a* persona at all
+    #
+    # Stojanov (2026) added the equivalent control at a reviewer's request and
+    # it changed the interpretation: random traits worsened mean correspondence
+    # but improved some error metrics, so part of the apparent benefit of real
+    # traits was generic response broadening, not person matching.
+    #
+    # See docs/correspondence_metrics.md.
+    scramble_personas: false
+    scramble_seed: 42
+
     # persona_prompt_header: |
     #   ## Persona Profile (this individual's past survey responses):
     # persona_question_prompt_separator: |

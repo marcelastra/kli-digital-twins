@@ -37,6 +37,12 @@ responses_to_csv
     The analysis CSV. This pipeline stage exists in neither upstream
     repository.
 
+correspondence
+    Human-twin correspondence metrics following Stojanov (2026): group-level
+    mean and dispersion agreement, individual-level profile similarity, and a
+    decomposition of error into systematic and random components. Includes the
+    published benchmark values and the paired arm comparison.
+
 reconcile
     Post-ingestion validation. Upstream has no test coverage for Qualtrics
     parsing; this reports what was dropped and why.

@@ -107,13 +107,19 @@ structure, not only by documentation.
 | `kli/responses_to_csv.py` | 593 | **The analysis CSV.** This pipeline stage exists in neither upstream repository. Derives its column schema from the study's own reference export. |
 | `kli/run_simulation.py` | 568 | Pipeline driver reading the nested config schema, with dry-run and offline stub modes and a per-run manifest. |
 | `kli/reconcile.py` | 290 | Post-ingestion validation. Detects the questions upstream silently drops to the display-logic defect. |
+| `kli/correspondence.py` | ~700 | **Correspondence metrics** implementing Stojanov (2026): Glass's Δ, SD ratio and dispersion mismatch at the group level; person-level MAD and within-person profile correlation at the individual level; outcome-level correlation; and decomposition of error into bias, RMSE and error variability. Includes that paper's published benchmark values, interpretive anchors, and paired arm comparison (t, Wilcoxon, Cohen's d_z). Metric *definitions* are from the cited paper; the implementation is ours. |
 | `kli/config.py` | 136 | Nested config reader; fails loudly on missing keys rather than silently defaulting. |
 | `kli/__init__.py`, `kli/providers/__init__.py` | 67 | Package docs and exports. |
 | `tests/test_survey_tree.py` | 234 | Traversal and round-trip invariants. |
-| `tests/test_pipeline.py` | 461 | Rendering, validation, control arm, egress guard, CSV extraction. |
+| `tests/test_pipeline.py` | ~544 | Rendering, validation, control arm, egress guard, CSV extraction. |
+| `tests/test_correspondence.py` | ~380 | Every correspondence metric checked against a hand-derivable case. |
 
-**Totals: ~3,600 lines of pipeline code and ~700 lines of tests, 81 tests
+**Totals: ~4,300 lines of pipeline code and ~1,100 lines of tests, 128 tests
 passing.** Upstream has no test coverage for any of these stages.
+
+The scrambled-persona control (`scramble_persona_assignment` in
+`kli/assemble_prompts.py`) is also original, and is the pipeline's analogue of
+the random-trait control in Stojanov (2026).
 
 Also newly written:
 
@@ -125,6 +131,7 @@ NOTICE                               # Apache 2.0 §4(d) attribution notice
 pyproject.toml                       # merged dependencies, plus local-model deps
 configs/README.md                    # real config documentation
 configs/example_study_local.yaml     # worked config for the local-model pipeline
+docs/correspondence_metrics.md       # methodological rationale for the metrics
 text_simulation/convert_responses_to_csv.py   # shim forwarding to kli.responses_to_csv
 ```
 

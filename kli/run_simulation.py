@@ -50,6 +50,7 @@ from kli.assemble_prompts import (
     find_persona_files,
     load_persona,
     resolve_arm_wording,
+    scramble_persona_assignment,
     summarize_arm,
 )
 from kli.config import ConfigError, get, load_config, section
@@ -70,6 +71,8 @@ class RunSettings:
     prompt_dir: Path | None
     persona_dir: Path | None
     empty_persona: bool
+    scramble_personas: bool
+    scramble_seed: int
     persona_header: str
     separator: str
     prompt_end: str | None
@@ -163,6 +166,8 @@ class RunSettings:
             ),
             persona_dir=Path(persona_dir) if persona_dir and not empty_persona else None,
             empty_persona=empty_persona,
+            scramble_personas=bool(combine.get("scramble_personas", False)),
+            scramble_seed=int(combine.get("scramble_seed", 42)),
             persona_header=str(wording["persona_header"]).strip(),
             separator=str(wording["separator"]).strip(),
             prompt_end=combine.get("combine_prompt_end") or None,
@@ -411,6 +416,20 @@ def run(
         if settings.persona_dir is not None
         else {}
     )
+    if settings.scramble_personas and personas:
+        personas = scramble_persona_assignment(
+            personas, seed=settings.scramble_seed
+        )
+        print(
+            "\nNOTE: SCRAMBLED-PERSONA CONTROL is active "
+            f"(scramble_seed: {settings.scramble_seed}).\n"
+            "  Every participant receives a real persona belonging to someone\n"
+            "  else. Comparing this arm against the matched-persona arm\n"
+            "  isolates person-specific signal from the generic benefit of\n"
+            "  having a persona at all. This is NOT a twin run -- do not report\n"
+            "  its output as twin accuracy.\n"
+        )
+
     if not settings.empty_persona and not personas:
         raise FileNotFoundError(
             f"No persona .txt files in {settings.persona_dir}. For the "
@@ -446,7 +465,9 @@ def run(
             )
 
     arm = summarize_arm(
-        empty_persona=settings.empty_persona, persona_dir=settings.persona_dir
+        empty_persona=settings.empty_persona,
+        persona_dir=settings.persona_dir,
+        scrambled=settings.scramble_personas,
     )
     mode = "dry-run" if dry_run else ("stub-model" if stub else "live")
     print(
@@ -489,6 +510,8 @@ def run(
         "mode": mode,
         "arm": arm,
         "empty_persona_control": settings.empty_persona,
+        "scrambled_persona_control": settings.scramble_personas,
+        "scramble_seed": settings.scramble_seed if settings.scramble_personas else None,
         "control_wording": settings.control_wording,
         "include_reasoning": settings.include_reasoning,
         "questions_per_call": settings.questions_per_call,
