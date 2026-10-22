@@ -82,6 +82,7 @@ class RunSettings:
     persona_wording: bool
     wording_note: str | None
     questions_per_call: int | None
+    replicates: int
     model: LocalModelConfig
     num_workers: int
     max_participants: int | None
@@ -181,6 +182,7 @@ class RunSettings:
                 if sim.get("questions_per_call")
                 else None
             ),
+            replicates=max(1, int(sim.get("replicates", 1) or 1)),
             model=model,
             num_workers=int(sim.get("num_workers", 4) or 4),
             max_participants=None if max_personas < 0 else max_personas,
@@ -279,8 +281,25 @@ def _simulate_one(
     *,
     dry_run: bool,
     stub: bool,
+    replicate: int = 1,
 ) -> tuple[str, Any]:
-    """Simulate one participant. Returns ``(pid, report | Exception)``."""
+    """Simulate one participant once.
+
+    Args:
+        path: The participant's response JSON.
+        settings: Resolved run settings.
+        personas: Participant id to persona file.
+        client: Model client, or None for dry-run/stub.
+        dry_run: Build prompts only.
+        stub: Fill skeletons locally.
+        replicate: 1-based replicate index. Replicates of the same participant
+            are written to separate files so that within-twin variability can
+            be measured; they are NOT averaged here, because averaging would
+            destroy exactly the quantity the replicates exist to estimate.
+
+    Returns:
+        ``(pid, report | Exception)``.
+    """
     pid = extract_pid(path)
     if pid is None:
         return path.name, ValueError("no participant id in filename")
@@ -322,7 +341,8 @@ def _simulate_one(
             if settings.prompt_dir is not None:
                 settings.prompt_dir.mkdir(parents=True, exist_ok=True)
                 suffix = f"_chunk{index}" if len(chunks) > 1 else ""
-                (settings.prompt_dir / f"pid_{pid}{suffix}_prompt.txt").write_text(
+                rep = f"_rep{replicate}" if settings.replicates > 1 else ""
+                (settings.prompt_dir / f"pid_{pid}{rep}{suffix}_prompt.txt").write_text(
                     prompt, encoding="utf-8"
                 )
 
@@ -349,7 +369,8 @@ def _simulate_one(
         )
 
         settings.output_json_dir.mkdir(parents=True, exist_ok=True)
-        (settings.output_json_dir / f"pid_{pid}_response.json").write_text(
+        rep = f"_rep{replicate}" if settings.replicates > 1 else ""
+        (settings.output_json_dir / f"pid_{pid}{rep}_response.json").write_text(
             json.dumps(document, indent=2, ensure_ascii=False), encoding="utf-8"
         )
         return pid, report
@@ -470,10 +491,31 @@ def run(
         scrambled=settings.scramble_personas,
     )
     mode = "dry-run" if dry_run else ("stub-model" if stub else "live")
-    print(
-        f"running {len(paths)} participant(s) | arm: {arm} | mode: {mode} | "
-        f"model: {settings.model.model_name} @ T={settings.model.temperature}"
+    total_runs = len(paths) * settings.replicates
+    replicate_note = (
+        f" x {settings.replicates} replicates = {total_runs} runs"
+        if settings.replicates > 1
+        else ""
     )
+    print(
+        f"running {len(paths)} participant(s){replicate_note} | arm: {arm} | "
+        f"mode: {mode} | model: {settings.model.model_name} "
+        f"@ T={settings.model.temperature} | num_ctx={settings.model.num_ctx}"
+    )
+
+    if settings.replicates > 1 and settings.model.temperature == 0.0:
+        print(
+            f"WARNING: {settings.replicates} replicates requested at "
+            "temperature 0.0.\n"
+            "  At temperature 0 the model is near-deterministic, so repeated "
+            "runs will be\n"
+            "  near-identical and the stability estimate will be close to zero "
+            "by construction\n"
+            "  rather than by finding. Raise the temperature to measure "
+            "stability, or set\n"
+            "  replicates: 1 if determinism is what you want.",
+            file=sys.stderr,
+        )
 
     started = time.monotonic()
     reports: list[Any] = []
@@ -490,8 +532,10 @@ def run(
                 client,
                 dry_run=dry_run,
                 stub=stub,
+                replicate=rep,
             )
             for path in paths
+            for rep in range(1, settings.replicates + 1)
         ]
         for done_count, future in enumerate(futures, 1):
             pid, result = future.result()
@@ -515,6 +559,7 @@ def run(
         "control_wording": settings.control_wording,
         "include_reasoning": settings.include_reasoning,
         "questions_per_call": settings.questions_per_call,
+        "replicates": settings.replicates,
         "on_failure": settings.on_failure,
         "system_instruction": settings.system_instruction,
         "separator": settings.separator,

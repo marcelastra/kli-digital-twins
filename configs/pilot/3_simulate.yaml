@@ -1,0 +1,131 @@
+# PILOT STEP 3 - build the twins and have them answer the holdout instrument.
+#
+#   python -m kli.run_simulation --config configs/pilot/3_simulate.yaml --health-check
+#   python -m kli.run_simulation --config configs/pilot/3_simulate.yaml --dry-run
+#   python -m kli.run_simulation --config configs/pilot/3_simulate.yaml --stub-model
+#   python -m kli.run_simulation --config configs/pilot/3_simulate.yaml
+#
+# Then:
+#   python -m kli.pilot_metrics \
+#       --human data/pilot/holdout/response_json \
+#       --twin  runs/pilot/matched/response_json_llm_imputed \
+#       --out   runs/pilot/matched/metrics
+#
+# This config is the MATCHED arm. Copy it twice more for the controls, changing
+# only the lines marked ARM and re-rooting every runs/ path so the arms do not
+# overwrite one another.
+
+qsf_to_json:
+  input_file: data/pilot/holdout/raw_data/sjt.qsf
+  output_file: data/pilot/holdout/survey_flow.json
+
+csv_to_fill_answers:
+  input_survey_template: data/pilot/holdout/survey_flow.json
+  input_csv_file: data/pilot/holdout/raw_data/sjt_responses.csv
+  output_dir: data/pilot/holdout/response_json
+  limit: -1
+
+text_simulation:
+  questions_to_texts:
+    # The HOLDOUT instrument: the questions the twins answer.
+    input_path: data/pilot/holdout/response_json
+    output_dir: runs/pilot/matched/text_questions
+    include_reasoning: false
+
+  create_text_simulation_input:
+    # Personas rendered from the PERSONA instrument (step 1), via:
+    #   python text_simulation/batch_convert_personas.py \
+    #       --persona_json_dir data/pilot/persona/response_json \
+    #       --output_text_dir  data/pilot/persona_text \
+    #       --variant full
+    persona_text_dir: data/pilot/persona_text
+    output_combined_prompts_dir: runs/pilot/matched/prompts
+
+    # ARM: matched = both false. See the two control arms below.
+    empty_persona_prompt: false
+    scramble_personas: false
+    scramble_seed: 42
+
+  LLM_simulation:
+    question_json_base_dir: data/pilot/holdout/response_json
+    output_updated_questions_dir: runs/pilot/matched/response_json_llm_imputed
+
+    LLM_config:
+      provider: local
+      model_name: mistral
+      base_url: http://localhost:11434
+      api_style: ollama
+
+      # Above zero so repeated runs can differ. Stability is undefined at 0:
+      # every replicate returns the same answer by construction, not by
+      # finding. The run warns if you set replicates > 1 at temperature 0.
+      temperature: 0.7
+
+      # Cap on the GENERATED answer. Not the context window.
+      max_tokens: 2048
+
+      # CONTEXT WINDOW, sent explicitly on every request.
+      #
+      # Ollama does not default to the model's capability -- it applies its own
+      # default (2048 in older builds, 4096 in newer) and silently discards
+      # anything over it, oldest tokens first. The persona is the oldest part
+      # of the prompt, so an over-long prompt yields a fluent answer from a
+      # model that never saw the persona, with nothing in the output to show
+      # it. Setting this explicitly prevents that; the pipeline also measures
+      # each prompt and refuses to send one that would not fit.
+      #
+      # Mistral 7B supports up to 32768. Larger windows cost memory whether or
+      # not you fill them.
+      num_ctx: 8192
+
+      request_timeout: 900
+      max_retries: 5
+
+    # Questions per model call. A 7B model given a full persona plus a long
+    # SJT degrades well before it overflows. Lower this if the context check
+    # starts refusing prompts, or if answers look careless late in a chunk.
+    questions_per_call: 8
+
+    # REPLICATES: how many times each twin answers the full holdout set.
+    # Requires temperature > 0 to be informative. Runtime scales linearly:
+    # 3 participants x 5 replicates = 15 runs.
+    replicates: 5
+
+    # Local servers queue requests; more workers than cores rarely helps, and
+    # a 7B model on CPU is slow. Start low.
+    num_workers: 2
+
+    # "blank" records a failed question as missing rather than leaving the
+    # human's own answer in a file labelled as model output.
+    on_failure: blank
+
+    force_regenerate: false
+    max_personas: -1
+
+    # Keep false. Lifting this permits participant data to leave the machine,
+    # disables the proxy-free transport, and is recorded in the run manifest.
+    allow_remote_endpoint: false
+
+  convert_to_csv:
+    input_json_dir: runs/pilot/matched/response_json_llm_imputed
+    reference_csv_path: data/pilot/holdout/raw_data/sjt_responses.csv
+    output_dir: runs/pilot/matched/csv_output
+
+# ---------------------------------------------------------------------------
+# THE TWO CONTROL ARMS
+# ---------------------------------------------------------------------------
+#
+# Copy this file to 3_simulate_scrambled.yaml and 3_simulate_empty.yaml,
+# re-root every runs/pilot/matched/ path, and change one setting each:
+#
+#   scrambled:  scramble_personas: true
+#               Each participant gets a real persona belonging to someone else.
+#               matched - scrambled = person-specific signal.
+#
+#   empty:      empty_persona_prompt: true
+#               No persona at all.
+#               scrambled - empty = benefit of having any persona.
+#
+# At three participants these contrasts are illustrative rather than
+# inferential, but running all three in the pilot proves the arms work and
+# gives you the runtime estimate for the full study.

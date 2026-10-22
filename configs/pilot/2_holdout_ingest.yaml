@@ -1,0 +1,26 @@
+# PILOT STEP 2 - ingest the HOLDOUT instrument (your SJT).
+#
+# This is what the twins will be asked to answer and what their answers are
+# scored against. Same participants as step 1, matched by the ID column.
+#
+#   python processing_qualtrics_qsf/parse_qsf.py      --config configs/pilot/2_holdout_ingest.yaml
+#   python processing_qualtrics_csv/get_responses.py  --config configs/pilot/2_holdout_ingest.yaml
+#   python -m kli.reconcile                           --config configs/pilot/2_holdout_ingest.yaml
+#
+# Run reconcile on BOTH instruments. It reports questions silently dropped
+# during ingestion, which is the failure most likely to go unnoticed.
+
+qsf_to_json:
+  input_file: data/pilot/holdout/raw_data/sjt.qsf
+  output_file: data/pilot/holdout/survey_flow.json
+  exclude_blocks: null
+
+  # If the SJT uses rank-order items, the parser raises a ValueError naming the
+  # QID. List those QIDs here to exclude them, or add rank support (see README).
+  # exclude_questions: ["QID123"]
+
+csv_to_fill_answers:
+  input_survey_template: data/pilot/holdout/survey_flow.json
+  input_csv_file: data/pilot/holdout/raw_data/sjt_responses.csv
+  output_dir: data/pilot/holdout/response_json
+  limit: -1

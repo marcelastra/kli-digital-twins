@@ -1,0 +1,20 @@
+# PILOT STEP 1 - ingest the PERSONA instrument.
+#
+# This is the questionnaire the twin is built FROM. Its items must not overlap
+# with the holdout instrument, or the twin is copying from its own prompt
+# rather than predicting.
+#
+#   python processing_qualtrics_qsf/parse_qsf.py      --config configs/pilot/1_persona_ingest.yaml
+#   python processing_qualtrics_csv/get_responses.py  --config configs/pilot/1_persona_ingest.yaml
+#   python -m kli.reconcile                           --config configs/pilot/1_persona_ingest.yaml
+
+qsf_to_json:
+  input_file: data/pilot/persona/raw_data/persona_survey.qsf
+  output_file: data/pilot/persona/survey_flow.json
+  exclude_blocks: null
+
+csv_to_fill_answers:
+  input_survey_template: data/pilot/persona/survey_flow.json
+  input_csv_file: data/pilot/persona/raw_data/persona_responses.csv
+  output_dir: data/pilot/persona/response_json
+  limit: -1

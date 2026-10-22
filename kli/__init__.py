@@ -37,6 +37,11 @@ responses_to_csv
     The analysis CSV. This pipeline stage exists in neither upstream
     repository.
 
+pilot_metrics
+    Item-level agreement and across-run stability -- the two quantities that
+    remain meaningful at pilot sample sizes, where correlations across
+    participants do not.
+
 correspondence
     Human-twin correspondence metrics following Stojanov (2026): group-level
     mean and dispersion agreement, individual-level profile similarity, and a

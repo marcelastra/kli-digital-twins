@@ -66,6 +66,7 @@ OpenAI-compatible local server (llama.cpp, LM Studio, vLLM) set
 
 from __future__ import annotations
 
+import http.client
 import ipaddress
 import json
 import socket
@@ -78,6 +79,10 @@ from urllib.parse import urlparse
 
 __all__ = [
     "LocalModelConfig",
+    "verified_peer_addresses",
+    "ContextWindowExceeded",
+    "estimate_tokens",
+    "DEFAULT_NUM_CTX",
     "LocalModelClient",
     "assert_local_endpoint",
     "RemoteEndpointBlocked",
@@ -86,6 +91,59 @@ __all__ = [
 
 DEFAULT_BASE_URL = "http://localhost:11434"
 DEFAULT_MODEL = "mistral"
+
+#: Context window to request, in tokens. Set explicitly and deliberately.
+#:
+#: Ollama does NOT default to the model's own capability -- it applies its own
+#: default (2048 in older builds, 4096 in newer ones) and, when a prompt
+#: exceeds it, SILENTLY DISCARDS THE OVERFLOW. No error, no warning, no field
+#: in the response.
+#:
+#: For this pipeline that failure is particularly severe, because truncation
+#: drops the OLDEST tokens and the persona is the first thing in the prompt.
+#: An over-long prompt therefore yields a fluent, well-formatted answer from a
+#: model that never saw the persona -- a no-persona control masquerading as a
+#: twin, with nothing in the output to distinguish it.
+#:
+#: 8192 is a safe default for Mistral 7B (32k capable). Raise it for longer
+#: personas, but note that Ollama allocates KV cache for the full window, so
+#: a large num_ctx costs memory whether or not you use it.
+DEFAULT_NUM_CTX = 8192
+
+#: Characters per token, used to size a prompt before sending it.
+#:
+#: Deliberately pessimistic. English averages roughly 4 characters per token,
+#: but survey text is full of punctuation, digits, option markers and JSON
+#: scaffolding, all of which tokenize less efficiently. Estimating 3.0 means we
+#: over-count and refuse slightly early, which is the safe direction: refusing
+#: a prompt that would have fit costs a config change, while accepting one that
+#: does not fit costs a silently persona-free dataset.
+CHARS_PER_TOKEN = 3.0
+
+
+class ContextWindowExceeded(RuntimeError):
+    """Raised when a prompt is too large for the configured context window.
+
+    Raised *before* the request is sent. The alternative -- letting the server
+    truncate -- produces a plausible-looking answer from a model that never saw
+    the start of the prompt.
+    """
+
+
+def estimate_tokens(text: str) -> int:
+    """Conservatively estimate the token count of a string.
+
+    A character heuristic rather than a real tokenizer, because the tokenizer
+    depends on the model and we do not want a hard dependency for a safety
+    check. It over-estimates, which is the direction that fails safe.
+
+    Args:
+        text: The text to size.
+
+    Returns:
+        An estimated token count.
+    """
+    return int(len(text) / CHARS_PER_TOKEN) + 1
 
 
 class RemoteEndpointBlocked(RuntimeError):
@@ -164,6 +222,132 @@ def assert_local_endpoint(base_url: str, *, allow_remote: bool = False) -> None:
             )
 
 
+# ---------------------------------------------------------------------------
+# Hardened transport
+# ---------------------------------------------------------------------------
+#
+# Checking that the URL's hostname is loopback is necessary but NOT sufficient.
+# Two ways a request to http://localhost:11434 can still leave the machine:
+#
+#   1. PROXY ENVIRONMENT VARIABLES. urllib.request.urlopen() builds an opener
+#      with a ProxyHandler that reads http_proxy / HTTPS_PROXY. Those are
+#      exempted for loopback only when no_proxy happens to name it. On a
+#      managed laptop or VPN where http_proxy is set and no_proxy is not,
+#      urllib routes the request -- participant data included -- to the proxy,
+#      while a hostname-only check still reports the endpoint as local.
+#      Verified: with http_proxy set and no_proxy unset,
+#      urllib.request.proxy_bypass("localhost") returns False.
+#
+#   2. NAME RESOLUTION. A hostname that resolves to loopback at check time
+#      could resolve elsewhere at connect time.
+#
+# Both are closed here. ProxyHandler({}) disables proxying regardless of the
+# environment, and the connection classes below verify the socket's ACTUAL peer
+# address after connecting, which is the ground truth no configuration can
+# misreport. The peer address is recorded so the run manifest can state where
+# the data really went rather than where it was supposed to go.
+
+
+#: Peer addresses observed on verified connections, newest last. Read by the
+#: run manifest.
+_VERIFIED_PEERS: list[str] = []
+
+
+def _assert_peer_is_loopback(sock: Any, host: str) -> None:
+    """Verify an established socket's remote address is loopback.
+
+    Args:
+        sock: A connected socket.
+        host: The hostname requested, for the error message.
+
+    Raises:
+        RemoteEndpointBlocked: If the peer is not loopback. The socket is
+            closed before raising, so nothing is sent over it.
+    """
+    try:
+        peer = sock.getpeername()[0]
+    except OSError as exc:  # pragma: no cover - platform dependent
+        sock.close()
+        raise RemoteEndpointBlocked(
+            f"Could not determine the peer address for {host!r}; refusing to "
+            "send participant data over an unverifiable connection."
+        ) from exc
+
+    try:
+        is_loopback = ipaddress.ip_address(peer).is_loopback
+    except ValueError:
+        is_loopback = False
+
+    if not is_loopback:
+        sock.close()
+        raise RemoteEndpointBlocked(
+            f"Connection to {host!r} was established to {peer}, which is NOT "
+            "loopback. The connection has been closed and nothing was sent.\n"
+            "This usually means an HTTP proxy is configured in the environment "
+            "(http_proxy / HTTPS_PROXY), or the hostname resolves off-machine."
+        )
+
+    if not _VERIFIED_PEERS or _VERIFIED_PEERS[-1] != peer:
+        _VERIFIED_PEERS.append(peer)
+
+
+class _LoopbackHTTPConnection(http.client.HTTPConnection):
+    """HTTP connection that refuses to proceed unless the peer is loopback."""
+
+    def connect(self) -> None:  # noqa: D102 - inherited
+        super().connect()
+        _assert_peer_is_loopback(self.sock, self.host)
+
+
+class _LoopbackHTTPSConnection(http.client.HTTPSConnection):
+    """HTTPS connection that refuses to proceed unless the peer is loopback."""
+
+    def connect(self) -> None:  # noqa: D102 - inherited
+        super().connect()
+        _assert_peer_is_loopback(self.sock, self.host)
+
+
+class _LoopbackHTTPHandler(urllib.request.HTTPHandler):
+    """urllib handler using the loopback-verified HTTP connection."""
+
+    def http_open(self, req):  # noqa: D102, ANN001, ANN201 - inherited
+        return self.do_open(_LoopbackHTTPConnection, req)
+
+
+class _LoopbackHTTPSHandler(urllib.request.HTTPSHandler):
+    """urllib handler using the loopback-verified HTTPS connection."""
+
+    def https_open(self, req):  # noqa: D102, ANN001, ANN201 - inherited
+        return self.do_open(_LoopbackHTTPSConnection, req)
+
+
+def _build_loopback_opener() -> urllib.request.OpenerDirector:
+    """Build an opener that cannot proxy and cannot leave the machine.
+
+    ``ProxyHandler({})`` is the critical piece: an empty proxy map means no
+    proxy can be applied no matter what the environment says. The loopback
+    handlers are defense in depth, verifying the realized connection rather
+    than trusting configuration.
+
+    Returns:
+        An opener safe for sending participant data to a local model.
+    """
+    return urllib.request.build_opener(
+        urllib.request.ProxyHandler({}),
+        _LoopbackHTTPHandler(),
+        _LoopbackHTTPSHandler(),
+    )
+
+
+def verified_peer_addresses() -> list[str]:
+    """Peer addresses this process has actually connected to, in order.
+
+    Recorded in the run manifest so a write-up can state where requests went,
+    rather than only where they were configured to go.
+    """
+    return list(_VERIFIED_PEERS)
+
+
 @dataclass
 class LocalModelConfig:
     """Settings for a local model server.
@@ -174,8 +358,13 @@ class LocalModelConfig:
         api_style: ``"ollama"`` for ``/api/chat``, ``"openai"`` for
             ``/v1/chat/completions``.
         temperature: Sampling temperature. Use 0.0 for the deterministic arm.
-        max_tokens: Response cap. Generous by default: a full question chunk's
-            JSON skeleton can be long.
+        max_tokens: Cap on the GENERATED response, not the context window.
+            These are different numbers and conflating them is a common error:
+            upstream's ``max_tokens: 16384`` is an output cap and says nothing
+            about how much input the model can see.
+        num_ctx: Total context window in tokens, covering prompt and response
+            together. Sent explicitly so the server cannot apply its own
+            smaller default and silently truncate. See :data:`DEFAULT_NUM_CTX`.
         max_retries: Attempts per request before giving up.
         request_timeout: Seconds per request. Local generation on CPU is slow;
             the default is deliberately high.
@@ -187,7 +376,8 @@ class LocalModelConfig:
     base_url: str = DEFAULT_BASE_URL
     api_style: str = "ollama"
     temperature: float = 0.0
-    max_tokens: int = 8192
+    max_tokens: int = 4096
+    num_ctx: int = DEFAULT_NUM_CTX
     max_retries: int = 5
     request_timeout: float = 900.0
     allow_remote_endpoint: bool = False
@@ -212,8 +402,11 @@ class LocalModelConfig:
             "api_style": self.api_style,
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
+            "num_ctx": self.num_ctx,
             "endpoint_is_loopback": not self.allow_remote_endpoint,
             "allow_remote_endpoint": self.allow_remote_endpoint,
+            "proxy_disabled": not self.allow_remote_endpoint,
+            "verified_peer_addresses": verified_peer_addresses(),
         }
 
 
@@ -234,6 +427,65 @@ class LocalModelClient:
 
     # -- plumbing ---------------------------------------------------------
 
+    def check_prompt_fits(self, *, system: str, user: str) -> dict[str, Any]:
+        """Size a prompt against the context window before sending it.
+
+        Args:
+            system: System instruction.
+            user: Assembled user prompt.
+
+        Returns:
+            ``{"estimated_prompt_tokens", "num_ctx", "max_tokens",
+            "headroom_tokens"}``.
+
+        Raises:
+            ContextWindowExceeded: If the prompt plus the reserved response
+                space would not fit.
+        """
+        prompt_tokens = estimate_tokens(system) + estimate_tokens(user)
+        reserved = self.config.max_tokens
+        available = self.config.num_ctx - reserved
+
+        if prompt_tokens > available:
+            raise ContextWindowExceeded(
+                f"Prompt is about {prompt_tokens:,} tokens, but only "
+                f"{available:,} are available "
+                f"(num_ctx {self.config.num_ctx:,} minus {reserved:,} reserved "
+                "for the response).\n"
+                "\n"
+                "Refusing to send it. If this were sent, the server would "
+                "silently discard the overflow from the START of the prompt -- "
+                "which is the persona -- and return a confident answer from a "
+                "model that never saw it.\n"
+                "\n"
+                "Fix by any of:\n"
+                "  - lower 'questions_per_call' so each call carries fewer "
+                "questions\n"
+                f"  - raise 'num_ctx' (Mistral 7B supports up to 32768; costs "
+                "memory)\n"
+                "  - lower 'max_tokens' if responses are comfortably shorter\n"
+                "  - use a shorter persona variant"
+            )
+
+        return {
+            "estimated_prompt_tokens": prompt_tokens,
+            "num_ctx": self.config.num_ctx,
+            "max_tokens": reserved,
+            "headroom_tokens": available - prompt_tokens,
+        }
+
+    def _opener(self) -> urllib.request.OpenerDirector:
+        """Build the opener for this client.
+
+        For a local endpoint this is the hardened, proxy-free, loopback-verified
+        opener (:func:`_build_loopback_opener`). Only when the guard has been
+        deliberately lifted does it fall back to the stock opener, which honors
+        the environment's proxy settings like any ordinary HTTP client.
+        """
+        if self.config.allow_remote_endpoint:
+            return urllib.request.build_opener()
+        return _build_loopback_opener()
+
     def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         url = f"{self.config.base_url}{path}"
         body = json.dumps(payload).encode("utf-8")
@@ -249,10 +501,12 @@ class LocalModelClient:
             self.config.base_url, allow_remote=self.config.allow_remote_endpoint
         )
         try:
-            with urllib.request.urlopen(
+            with self._opener().open(
                 request, timeout=self.config.request_timeout
             ) as response:
                 return json.loads(response.read().decode("utf-8"))
+        except RemoteEndpointBlocked:
+            raise
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")[:500]
             raise LocalModelError(
@@ -282,8 +536,10 @@ class LocalModelClient:
             self.config.base_url, allow_remote=self.config.allow_remote_endpoint
         )
         try:
-            with urllib.request.urlopen(url, timeout=30) as response:
+            with self._opener().open(url, timeout=30) as response:
                 data = json.loads(response.read().decode("utf-8"))
+        except RemoteEndpointBlocked:
+            raise
         except Exception as exc:  # noqa: BLE001 - reported, not raised
             return {"reachable": False, "model_available": False, "error": str(exc)}
 
@@ -321,6 +577,9 @@ class LocalModelClient:
         Raises:
             LocalModelError: If no attempt produced a JSON object.
         """
+        # Fail before sending rather than let the server truncate silently.
+        self.check_prompt_fits(system=system, user=user)
+
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
@@ -337,6 +596,9 @@ class LocalModelClient:
                 "options": {
                     "temperature": self.config.temperature,
                     "num_predict": self.config.max_tokens,
+                    # Sent on every request. Without it the server applies its
+                    # own default and truncates without saying so.
+                    "num_ctx": self.config.num_ctx,
                     **self.config.extra_options,
                 },
             }
