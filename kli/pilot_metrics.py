@@ -3,16 +3,17 @@
 ORIGINAL WORK (Kravis Leadership Institute). See ATTRIBUTION.md.
 
 -------------------------------------------------------------------------------
-WHY A SEPARATE MODULE FROM kli.correspondence
+WHY THESE METRICS AND NOT THE USUAL ONES
 -------------------------------------------------------------------------------
 
-The correspondence metrics in :mod:`kli.correspondence` are computed *across
+The metrics normally used to assess digital twins are computed *across
 participants*: a correlation between human and twin scores over the sample, a
-standard deviation ratio over the sample, a mean difference over the sample.
-With three participants none of those is interpretable. A correlation on n = 3
-can be .99 or -.99 by accident, and a standard deviation ratio computed from
-three points is almost pure noise. Running them is harmless as a plumbing
-check, but reporting them as findings would be misleading.
+standard deviation ratio over the sample, a standardized mean difference over
+the sample. With three participants none of those is interpretable. A
+correlation on n = 3 can be .99 or -.99 by accident, and a standard deviation
+computed from three points is almost pure noise. Those metrics live in the
+project's analysis repository and are applied once the full sample exists; see
+docs/choosing_metrics.md for the split and the reasoning.
 
 What *is* measurable with three participants:
 

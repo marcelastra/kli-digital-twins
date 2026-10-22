@@ -38,15 +38,11 @@ responses_to_csv
     repository.
 
 pilot_metrics
-    Item-level agreement and across-run stability -- the two quantities that
-    remain meaningful at pilot sample sizes, where correlations across
-    participants do not.
-
-correspondence
-    Human-twin correspondence metrics following Stojanov (2026): group-level
-    mean and dispersion agreement, individual-level profile similarity, and a
-    decomposition of error into systematic and random components. Includes the
-    published benchmark values and the paired arm comparison.
+    Item-level agreement and across-run stability. These are within-pair and
+    within-twin quantities, so they hold at any sample size. Metrics computed
+    ACROSS participants -- correlations, variance ratios, standardized mean
+    differences -- are deliberately not in this repository; see
+    docs/choosing_metrics.md.
 
 reconcile
     Post-ingestion validation. Upstream has no test coverage for Qualtrics

@@ -30,7 +30,15 @@ See [`ATTRIBUTION.md`](ATTRIBUTION.md) for file-by-file provenance and commits.
 | 6. Local model execution | `kli/providers/local.py` | **KLI** | **Original** |
 | 7. Model output to response JSON | `kli/parse_responses.py` | **KLI** | **Original** |
 | 8. Response JSON to analysis CSV | `kli/responses_to_csv.py` | **KLI** | **Original** |
-| 9. Metrics and meta-analysis | `mega_study_evaluation/` | mega-study | Vendored, ~40 lines per study |
+| 9. Pilot metrics | `kli/pilot_metrics.py` | **KLI** | **Original** — valid at any n |
+| 10. Full-sample metrics | *analysis repository* | — | Not in this repo; see `docs/choosing_metrics.md` |
+
+**Scope.** This repository is the construction pipeline plus the metrics that
+are valid at pilot sample sizes (per-item agreement, run-to-run stability).
+Metrics computed *across participants* — correlations, variance ratios,
+standardized mean differences — live in the project's analysis repository,
+because with three participants they are not interpretable and keeping one copy
+avoids two drifting apart. `docs/choosing_metrics.md` explains the split.
 
 **Everything original is under `kli/` and `tests/`.** Nothing in `kli/` imports
 from `text_simulation/`, so the authorship boundary is enforced by the code's own

@@ -80,7 +80,7 @@ text_simulation:
     # but improved some error metrics, so part of the apparent benefit of real
     # traits was generic response broadening, not person matching.
     #
-    # See docs/correspondence_metrics.md.
+    # See docs/choosing_metrics.md.
     scramble_personas: false
     scramble_seed: 42
 
