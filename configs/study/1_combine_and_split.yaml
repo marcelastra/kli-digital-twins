@@ -1,0 +1,47 @@
+# STUDY STEP 1 - combine the three waves, then split the SJTs.
+#
+#   python -m kli.combine_waves --config configs/study/1_combine_and_split.yaml
+#   python -m kli.sjt_split     --config configs/study/1_combine_and_split.yaml
+#
+# Then render the persona base (all waves, all ten SJTs removed):
+#
+#   cd text_simulation && python batch_convert_personas.py \
+#       --persona_json_dir ../data/study/sjt_split/persona_json \
+#       --output_text_dir  ../data/study/persona_text --variant full
+
+combine_waves:
+  # In wave order. Each is that wave's get_responses.py output_dir.
+  waves:
+    wave1: data/study/wave1/response_json
+    wave2: data/study/wave2/response_json
+    wave3: data/study/wave3/response_json
+  output_dir: data/study/combined/response_json
+
+  # Writes combined_human_values.csv and combined_human_labels.csv here:
+  # one row per participant, one column per answer across all waves.
+  csv_output_dir: data/study/combined
+
+  # StudentID is asked in every wave; it is an identifier, not persona content.
+  exclude_question_ids: [QID1001]
+
+  # true: participants missing any wave are left out and listed in
+  # combine_report.json (a mistyped StudentID shows up there).
+  require_all_waves: true
+
+sjt_split:
+  combined_json_dir: data/study/combined/response_json
+  output_dir: data/study/sjt_split
+
+  # SJT1-SJT10, Wave 3 block "Leadership development".
+  sjt_question_ids: [QID1101, QID1102, QID1103, QID1104, QID1105,
+                     QID1106, QID1107, QID1108, QID1109, QID1110]
+  n_holdout: 2
+
+  # The two holdouts are drawn at random ONCE for the whole study from this
+  # seed. Fix it before looking at any data and report it. With 20261026 the
+  # draw is SJT2 and SJT4; kli.sjt_split prints the result and writes it to
+  # sjt_split.json and every run manifest.
+  holdout_seed: 20261026
+
+  # Optional: name the holdouts explicitly instead of drawing them.
+  # holdout_question_ids: [QID1102, QID1104]

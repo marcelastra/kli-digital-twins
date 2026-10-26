@@ -24,6 +24,7 @@ See [`ATTRIBUTION.md`](ATTRIBUTION.md) for file-by-file provenance and commits.
 | 1. QSF to survey template JSON | `processing_qualtrics_qsf/` | mega-study | Vendored, works |
 | 1b. **Validate ingestion** | `kli/reconcile.py` | **KLI** | **Original** |
 | 2. Qualtrics CSV to response JSON | `processing_qualtrics_csv/` | mega-study | Vendored, works |
+| 2b. **Combine waves; split SJTs** | `kli/combine_waves.py`, `kli/sjt_split.py` | **KLI** | **Original** — see `configs/study/` |
 | 3. Persona JSON to persona text | `text_simulation/` | demo | Vendored |
 | 4. Question JSON to prompt | `kli/render_questions.py` | **KLI** | **Original** |
 | 5. Persona + question to prompt | `kli/assemble_prompts.py` | **KLI** | **Original**, incl. control arm |

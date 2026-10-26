@@ -55,8 +55,15 @@ from kli.assemble_prompts import (
 )
 from kli.config import ConfigError, get, load_config, section
 from kli.parse_responses import aggregate_reports, apply_responses
-from kli.providers.local import LocalModelClient, LocalModelConfig
+from kli.providers.local import DEFAULT_NUM_CTX, LocalModelClient, LocalModelConfig
 from kli.render_questions import build_question_prompt, chunk_refs
+from kli.sjt_split import (
+    DEFAULT_TRAINING_HEADER,
+    SjtSplit,
+    check_question_set,
+    load_split,
+    render_training_sjts,
+)
 from kli.survey_tree import RoundtripError, walk_questions
 
 __all__ = ["RunSettings", "run", "main"]
@@ -88,6 +95,21 @@ class RunSettings:
     max_participants: int | None
     force_regenerate: bool
     on_failure: str
+    #: SJT-inclusion arm. ``sjt_split`` is None when the config has no
+    #: ``text_simulation.sjt_split`` block, in which case nothing changes.
+    sjt_split: SjtSplit | None = None
+    include_training_sjts: bool = False
+    training_json_dir: Path | None = None
+    training_header: str = DEFAULT_TRAINING_HEADER
+
+    @property
+    def prompt_has_profile(self) -> bool:
+        """Whether the prompt contains any profile text at all.
+
+        False only for the plain no-persona control. The no-persona arm with
+        training SJTs switched on (the "SJT-only twin") does contain a profile.
+        """
+        return not self.empty_persona or self.include_training_sjts
 
     @classmethod
     def from_config(cls, config: dict[str, Any]) -> RunSettings:
@@ -119,12 +141,37 @@ class RunSettings:
         empty_persona = bool(combine.get("empty_persona_prompt", False))
         persona_dir = combine.get("persona_text_dir")
 
+        sjt = section(config, "text_simulation.sjt_split")
+        sjt_split = None
+        include_sjts = False
+        training_dir = None
+        if sjt:
+            sjt_split = load_split(
+                get(config, "text_simulation.sjt_split.split_file")
+            )
+            include_sjts = get(
+                config, "text_simulation.sjt_split.include_training_sjts_in_persona"
+            )
+            if not isinstance(include_sjts, bool):
+                raise ConfigError(
+                    "include_training_sjts_in_persona must be true or false, got "
+                    f"{include_sjts!r}."
+                )
+            if include_sjts:
+                training_dir = Path(
+                    get(config, "text_simulation.sjt_split.training_json_dir")
+                )
+
         model = LocalModelConfig(
             model_name=str(llm.get("model_name", "mistral")),
             base_url=str(llm.get("base_url", "http://localhost:11434")),
             api_style=str(llm.get("api_style", "ollama")),
             temperature=float(llm.get("temperature", 0.0)),
             max_tokens=int(llm.get("max_tokens", 8192)),
+            # Read from the config. It was previously omitted here, so the
+            # documented num_ctx key had no effect and every run used the
+            # default -- unnoticed because the pilot config set the same value.
+            num_ctx=int(llm.get("num_ctx", DEFAULT_NUM_CTX)),
             max_retries=int(llm.get("max_retries", 5)),
             request_timeout=float(llm.get("request_timeout", 900.0)),
             allow_remote_endpoint=bool(sim.get("allow_remote_endpoint", False)),
@@ -142,8 +189,10 @@ class RunSettings:
         # "control-arm wording" section of kli/assemble_prompts.py for why that
         # is both the stricter design and arguably a confound, and why the
         # difference between the two wordings is itself worth measuring.
+        # The no-persona arm with training SJTs does show the model a profile,
+        # so it takes persona-arm wording; only the plain control is "empty".
         wording = resolve_arm_wording(
-            empty_persona=empty_persona,
+            empty_persona=empty_persona and not include_sjts,
             control_wording=str(sim.get("control_wording", "upstream")),
             persona_header=combine.get("persona_prompt_header"),
             separator=combine.get("persona_question_prompt_separator"),
@@ -188,6 +237,12 @@ class RunSettings:
             max_participants=None if max_personas < 0 else max_personas,
             force_regenerate=bool(sim.get("force_regenerate", False)),
             on_failure=str(sim.get("on_failure", "blank")),
+            sjt_split=sjt_split,
+            include_training_sjts=include_sjts,
+            training_json_dir=training_dir,
+            training_header=str(
+                sjt.get("training_header") or DEFAULT_TRAINING_HEADER
+            ).strip(),
         )
 
 
@@ -309,6 +364,7 @@ def _simulate_one(
         refs = list(walk_questions(document))
 
         persona_text: str | None = None
+        persona_pid = pid
         if not settings.empty_persona:
             persona_path = personas.get(pid)
             if persona_path is None:
@@ -316,6 +372,12 @@ def _simulate_one(
                     f"no persona file for pid {pid} in {settings.persona_dir}"
                 )
             persona_text = load_persona(persona_path)
+            # Under scrambling this is the donor, whose training SJTs travel
+            # with their persona so the person-to-profile pairing stays broken.
+            persona_pid = extract_pid(persona_path) or pid
+
+        if settings.include_training_sjts:
+            persona_text = _with_training_sjts(persona_text, persona_pid, settings)
 
         chunks = chunk_refs(refs, settings.questions_per_call)
         merged: dict[str, Any] = {}
@@ -332,7 +394,7 @@ def _simulate_one(
             prompt = assemble_prompt(
                 question_prompt=question_prompt,
                 persona_text=persona_text,
-                empty_persona=settings.empty_persona,
+                empty_persona=not settings.prompt_has_profile,
                 persona_header=settings.persona_header,
                 separator=settings.separator,
                 prompt_end=settings.prompt_end,
@@ -379,6 +441,48 @@ def _simulate_one(
         raise
     except Exception as exc:  # noqa: BLE001 - collected into the run report
         return pid, exc
+
+
+def _training_path(pid: str, settings: RunSettings) -> Path:
+    assert settings.training_json_dir is not None
+    return settings.training_json_dir / f"pid_{pid}_response.json"
+
+
+def _with_training_sjts(
+    persona_text: str | None, pid: str, settings: RunSettings
+) -> str:
+    """Append participant ``pid``'s training SJTs, with their ratings."""
+    document = json.loads(_training_path(pid, settings).read_text(encoding="utf-8"))
+    block = f"{settings.training_header}\n\n{render_training_sjts(document)}"
+    return f"{persona_text.strip()}\n\n{block}" if persona_text else block
+
+
+def _check_sjt_inputs(
+    paths: list[Path], personas: dict[str, Path], settings: RunSettings
+) -> None:
+    """Fail before any model call if the SJT arm's inputs are inconsistent.
+
+    Raises:
+        SjtLeakError: If any participant's questions are not exactly the
+            holdout SJTs.
+        FileNotFoundError: If a needed training SJT file is missing.
+    """
+    assert settings.sjt_split is not None
+    for path in paths:
+        try:
+            check_question_set(
+                json.loads(path.read_text(encoding="utf-8")), settings.sjt_split
+            )
+        except ValueError as exc:
+            raise type(exc)(f"{path.name}: {exc}") from None
+        if settings.include_training_sjts:
+            pid = extract_pid(path) or ""
+            donor = extract_pid(personas[pid]) if pid in personas else pid
+            if not _training_path(donor or pid, settings).is_file():
+                raise FileNotFoundError(
+                    f"No training SJT file for pid {donor} in "
+                    f"{settings.training_json_dir}"
+                )
 
 
 def run(
@@ -457,11 +561,20 @@ def run(
             "no-persona control arm set 'empty_persona_prompt: true' instead."
         )
 
+    if settings.sjt_split is not None:
+        _check_sjt_inputs(paths, personas, settings)
+        print(
+            "SJT split: twins answer holdouts "
+            f"{list(settings.sjt_split.holdout_question_ids)}; training SJTs "
+            f"{'INCLUDED in' if settings.include_training_sjts else 'excluded from'}"
+            " the prompt."
+        )
+
     if settings.wording_note:
         print(f"\nNOTE: {settings.wording_note}\n")
 
     for warning in check_arm_consistency(
-        empty_persona=settings.empty_persona,
+        empty_persona=not settings.prompt_has_profile,
         system_instruction=settings.system_instruction,
         separator=settings.separator,
         control_wording=settings.control_wording or "upstream",
@@ -490,6 +603,12 @@ def run(
         persona_dir=settings.persona_dir,
         scrambled=settings.scramble_personas,
     )
+    if settings.sjt_split is not None:
+        arm += (
+            " + own training SJTs"
+            if settings.include_training_sjts
+            else " | training SJTs withheld"
+        )
     mode = "dry-run" if dry_run else ("stub-model" if stub else "live")
     total_runs = len(paths) * settings.replicates
     replicate_note = (
@@ -565,8 +684,21 @@ def run(
         "separator": settings.separator,
         "persona_header": (
             None
-            if (settings.empty_persona and not settings.persona_wording)
+            if (not settings.prompt_has_profile and not settings.persona_wording)
             else settings.persona_header
+        ),
+        "sjt_split": (
+            None
+            if settings.sjt_split is None
+            else {
+                **settings.sjt_split.manifest(),
+                "include_training_sjts_in_persona": settings.include_training_sjts,
+                "training_header": (
+                    settings.training_header
+                    if settings.include_training_sjts
+                    else None
+                ),
+            }
         ),
         "persona_wording_refers_to_persona": settings.persona_wording,
         "model": settings.model.manifest(),

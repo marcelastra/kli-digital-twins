@@ -1,0 +1,25 @@
+# STUDY STEP 0 - ingest WAVE 3. Repeat for each wave (0_ingest_wave{1,2,3}.yaml).
+#
+# The wave surveys identify people by a typed StudentID, but get_responses.py
+# needs a numeric TWIN_ID column. Add it first (writes a copy; the raw export is
+# never modified), and fix any duplicate/blank/non-numeric IDs it reports:
+#
+#   python -m kli.combine_waves --add-twin-id \
+#       data/study/wave3/raw_data/wave3_responses.csv \
+#       data/study/wave3/raw_data/wave3_responses_twinid.csv
+#
+# Then:
+#   python processing_qualtrics_qsf/parse_qsf.py      --config configs/study/0_ingest_wave3.yaml
+#   python processing_qualtrics_csv/get_responses.py  --config configs/study/0_ingest_wave3.yaml
+#   python -m kli.reconcile                           --config configs/study/0_ingest_wave3.yaml
+
+qsf_to_json:
+  input_file: data/study/wave3/raw_data/KLI_Digital_Twin_Wave3.qsf
+  output_file: data/study/wave3/survey_flow.json
+  exclude_blocks: null
+
+csv_to_fill_answers:
+  input_survey_template: data/study/wave3/survey_flow.json
+  input_csv_file: data/study/wave3/raw_data/wave3_responses_twinid.csv
+  output_dir: data/study/wave3/response_json
+  limit: -1

@@ -105,16 +105,19 @@ structure, not only by documentation.
 | `kli/providers/local.py` | 447 | **Local model provider** (Mistral via Ollama, or any OpenAI-compatible local server) with a hard no-egress guard that refuses non-loopback endpoints before any request is made. |
 | `kli/parse_responses.py` | 436 | Model output back into the response-JSON schema, with per-question validation against the instrument, the round-trip check, and explicit imputation flags that prevent ground-truth leakage. |
 | `kli/responses_to_csv.py` | 593 | **The analysis CSV.** This pipeline stage exists in neither upstream repository. Derives its column schema from the study's own reference export. |
-| `kli/run_simulation.py` | 568 | Pipeline driver reading the nested config schema, with dry-run and offline stub modes and a per-run manifest. |
+| `kli/run_simulation.py` | 777 | Pipeline driver reading the nested config schema, with dry-run and offline stub modes and a per-run manifest. Applies the SJT-inclusion switch across all three persona arms. |
 | `kli/reconcile.py` | 290 | Post-ingestion validation. Detects the questions upstream silently drops to the display-logic defect. |
 | `kli/pilot_metrics.py` | ~430 | **Pilot-scale metrics**: per-item human-twin agreement and run-to-run stability across replicates. Original; needed because the correspondence metrics are computed across participants and are uninterpretable at n = 3. |
+| `kli/combine_waves.py` | 426 | Joins the three KLI survey waves into one document per participant and one participant-by-answer table. Flattens Randomizer containers, which the vendored persona renderer otherwise skips silently. Adds the `TWIN_ID` column the vendored ingestion requires. |
+| `kli/sjt_split.py` | 362 | **The SJT-inclusion arm.** Seeded study-wide draw of two holdout SJTs; splits each participant into persona base, holdout and training SJTs; renders training SJTs with the participant's own ratings; refuses runs whose question set is not exactly the holdouts. |
 | `kli/config.py` | 136 | Nested config reader; fails loudly on missing keys rather than silently defaulting. |
 | `kli/__init__.py`, `kli/providers/__init__.py` | 67 | Package docs and exports. |
 | `tests/test_survey_tree.py` | 234 | Traversal and round-trip invariants. |
 | `tests/test_pipeline.py` | ~544 | Rendering, validation, control arm, egress guard, CSV extraction. |
+| `tests/test_sjt_arm.py` | 399 | Wave combination, the SJT split and leak checks, and all six arm combinations end to end in stub mode. |
 | `tests/test_security_and_pilot.py` | ~330 | No-egress guarantee (including a regression test for the proxy-bypass hole found in external review), context-window handling, and pilot metrics. |
 
-**Totals: ~4,300 lines of pipeline code and ~1,100 lines of tests, 130 tests
+**Totals: ~5,600 lines of pipeline code and ~1,500 lines of tests, 159 tests
 passing.** Upstream has no test coverage for any of these stages.
 
 The scrambled-persona control (`scramble_persona_assignment` in
