@@ -110,14 +110,16 @@ structure, not only by documentation.
 | `kli/pilot_metrics.py` | ~430 | **Pilot-scale metrics**: per-item human-twin agreement and run-to-run stability across replicates. Original; needed because the correspondence metrics are computed across participants and are uninterpretable at n = 3. |
 | `kli/combine_waves.py` | 426 | Joins the three KLI survey waves into one document per participant and one participant-by-answer table. Flattens Randomizer containers, which the vendored persona renderer otherwise skips silently. Adds the `TWIN_ID` column the vendored ingestion requires. |
 | `kli/sjt_split.py` | 362 | **The SJT-inclusion arm.** Seeded study-wide draw of two holdout SJTs; splits each participant into persona base, holdout and training SJTs; renders training SJTs with the participant's own ratings; refuses runs whose question set is not exactly the holdouts. |
+| `kli/compare_arms.py` | 209 | Scores several arms on the same participants and holdout items and reports each hypothesis contrast (H1-H3) per participant, descriptively. Refuses arms that differ in participants or items. |
 | `kli/config.py` | 136 | Nested config reader; fails loudly on missing keys rather than silently defaulting. |
 | `kli/__init__.py`, `kli/providers/__init__.py` | 67 | Package docs and exports. |
 | `tests/test_survey_tree.py` | 234 | Traversal and round-trip invariants. |
 | `tests/test_pipeline.py` | ~544 | Rendering, validation, control arm, egress guard, CSV extraction. |
 | `tests/test_sjt_arm.py` | 399 | Wave combination, the SJT split and leak checks, and all six arm combinations end to end in stub mode. |
+| `tests/test_compare_arms.py` | 157 | The shipped arm configs, the contrast directions, and all three hypotheses end to end in stub mode. |
 | `tests/test_security_and_pilot.py` | ~330 | No-egress guarantee (including a regression test for the proxy-bypass hole found in external review), context-window handling, and pilot metrics. |
 
-**Totals: ~5,600 lines of pipeline code and ~1,500 lines of tests, 159 tests
+**Totals: ~5,800 lines of pipeline code and ~1,700 lines of tests, 171 tests
 passing.** Upstream has no test coverage for any of these stages.
 
 The scrambled-persona control (`scramble_persona_assignment` in

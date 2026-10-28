@@ -32,6 +32,7 @@ See [`ATTRIBUTION.md`](ATTRIBUTION.md) for file-by-file provenance and commits.
 | 7. Model output to response JSON | `kli/parse_responses.py` | **KLI** | **Original** |
 | 8. Response JSON to analysis CSV | `kli/responses_to_csv.py` | **KLI** | **Original** |
 | 9. Pilot metrics | `kli/pilot_metrics.py` | **KLI** | **Original** — valid at any n |
+| 9b. Arm comparison (H1-H3) | `kli/compare_arms.py` | **KLI** | **Original** — see `configs/study/3_compare_arms.yaml` |
 | 10. Full-sample metrics | *analysis repository* | — | Not in this repo; see `docs/choosing_metrics.md` |
 
 **Scope.** This repository is the construction pipeline plus the metrics that

@@ -1,0 +1,68 @@
+# ARM empty_on: SJT-only twin: own 8 training SJTs, no persona (not in a hypothesis).
+# Generated from configs/study/2_simulate.yaml; only the ARM lines and runs/ paths differ.
+#
+# STUDY STEP 2 - simulate this arm.
+#
+#   python -m kli.run_simulation --config configs/study/arms/empty_on.yaml --dry-run --limit 1
+#   python -m kli.run_simulation --config configs/study/arms/empty_on.yaml --stub-model
+#   python -m kli.run_simulation --config configs/study/arms/empty_on.yaml
+#
+# One of six arms: {matched, scrambled, no-persona} x {training SJTs off, on}.
+#
+# Every arm answers, and is scored on, the same two holdout SJTs.
+
+text_simulation:
+  questions_to_texts:
+    include_reasoning: false
+
+  create_text_simulation_input:
+    persona_text_dir: data/study/persona_text
+    output_combined_prompts_dir: runs/study/empty_on/prompts
+
+    # ARM: matched = both false; scrambled = scramble_personas: true;
+    # no-persona = empty_persona_prompt: true.
+    empty_persona_prompt: true
+    scramble_personas: false
+    scramble_seed: 42
+
+  sjt_split:
+    # ARM: false = the twin sees only the persona base.
+    #      true  = the participant's own answers to the 8 training SJTs are
+    #              added after the persona. Under scrambling they come from the
+    #              same donor as the persona. With empty_persona_prompt: true
+    #              this gives an "SJT-only twin".
+    include_training_sjts_in_persona: true
+    split_file: data/study/sjt_split/sjt_split.json
+    training_json_dir: data/study/sjt_split/training_json
+
+  LLM_simulation:
+    # The two holdout SJTs. The run refuses to start if anything else is here.
+    question_json_base_dir: data/study/sjt_split/holdout_json
+    output_updated_questions_dir: runs/study/empty_on/response_json_llm_imputed
+
+    LLM_config:
+      provider: local
+      model_name: mistral
+      base_url: http://localhost:11434
+      api_style: ollama
+      temperature: 0.7
+      max_tokens: 2048
+      # A three-wave persona is roughly 20-30k tokens, well past 8192. Mistral
+      # 7B supports 32768. The run measures each prompt and refuses any that
+      # would not fit, so a too-small value fails loudly rather than truncating.
+      num_ctx: 32768
+      request_timeout: 900
+      max_retries: 5
+
+    questions_per_call: 2
+    replicates: 5
+    num_workers: 2
+    on_failure: blank
+    force_regenerate: false
+    max_personas: -1
+    allow_remote_endpoint: false
+
+  convert_to_csv:
+    input_json_dir: runs/study/empty_on/response_json_llm_imputed
+    reference_csv_path: data/study/wave3/raw_data/wave3_responses_twinid.csv
+    output_dir: runs/study/empty_on/csv_output

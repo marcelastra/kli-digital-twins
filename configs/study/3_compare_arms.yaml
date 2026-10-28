@@ -1,0 +1,33 @@
+# STUDY STEP 3 - compare arms: the tables behind H1-H3.
+#
+# Run each arm first (configs/study/arms/), then the per-arm pilot metrics are
+# computed here and set side by side:
+#
+#   for arm in matched_on matched_off empty_off scrambled_on; do
+#     python -m kli.run_simulation --config configs/study/arms/$arm.yaml
+#   done
+#   python -m kli.compare_arms --config configs/study/3_compare_arms.yaml
+#
+# Writes arm_summary.csv (exact-match rate, MAD, stability per arm) and
+# contrasts.csv (per participant: focal minus comparator). Descriptive only.
+
+compare_arms:
+  # The participants' own answers to the two holdout SJTs.
+  human_dir: data/study/sjt_split/holdout_json
+
+  arms:
+    meso: runs/study/matched_on/response_json_llm_imputed
+    macro: runs/study/matched_off/response_json_llm_imputed
+    no_persona: runs/study/empty_off/response_json_llm_imputed
+    scrambled: runs/study/scrambled_on/response_json_llm_imputed
+
+  contrasts:
+    # H1: meso twin vs the macro-twin proxy: the same participant trained on
+    # everything except the SJTs.
+    H1: {focal: meso, comparator: macro}
+    # H2: meso twin vs a twin given no persona data.
+    H2: {focal: meso, comparator: no_persona}
+    # H3: meso twin vs a twin given another participant's persona and SJTs.
+    H3: {focal: meso, comparator: scrambled}
+
+  output_dir: runs/study/comparison
